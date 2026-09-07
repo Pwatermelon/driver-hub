@@ -1,0 +1,10 @@
+.DS_Store
+.env
+bin/
+uploads/
+*.exe
+*.test
+coverage.out
+vendor/
+.idea/
+.vscode/

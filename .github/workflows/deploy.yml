@@ -1,0 +1,224 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия без префикса, например 1.0.0 (в коммите: var 1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      should_deploy: ${{ steps.ver.outputs.should_deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          PUSH_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$(echo "${INPUT_VERSION}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          else
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              MSG="$(git log -1 --pretty=%B)"$'\n'"${PR_TITLE}"
+            else
+              MSG="${PUSH_MSG:-$(git log -1 --pretty=%B)}"
+            fi
+            echo "$MSG"
+            VERSION="$(echo "$MSG" | grep -oiE '(var|ver|version)[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+          fi
+          if [ -z "${VERSION:-}" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "Skip: no version in commit (use: var 1.2.3 / ver 1.2.3 / v1.2.3)"
+            exit 0
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+  build:
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image_api: ${{ steps.meta.outputs.image_api }}
+      image_web: ${{ steps.meta.outputs.image_web }}
+      version: ${{ needs.resolve-version.outputs.version }}
+    env:
+      APP_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image names
+        id: meta
+        run: |
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          REPO="$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_api=ghcr.io/${OWNER}/${REPO}-api" >> "$GITHUB_OUTPUT"
+          echo "image_web=ghcr.io/${OWNER}/${REPO}-web" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_api }}:${{ env.APP_VERSION }}
+            ${{ steps.meta.outputs.image_api }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ env.APP_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Driver Hub API
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_web }}:${{ env.APP_VERSION }}
+            ${{ steps.meta.outputs.image_web }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ env.APP_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Driver Hub Web
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  deploy:
+    needs: [resolve-version, build]
+    if: needs.resolve-version.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DOMAIN: ${{ secrets.DOMAIN }}
+      ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      APP_VERSION: ${{ needs.build.outputs.version }}
+      IMAGE_API: ${{ needs.build.outputs.image_api }}
+      IMAGE_WEB: ${{ needs.build.outputs.image_web }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          for name in DOMAIN ACME_EMAIL DEPLOY_HOST DEPLOY_USER SSH_PRIVATE_KEY JWT_SECRET; do
+            [ -n "${!name}" ] || { echo "Missing $name"; exit 1; }
+          done
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          PORT="${SSH_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          printf '%s\n' \
+            "Host deploy-target" \
+            "  HostName ${DEPLOY_HOST}" \
+            "  User ${DEPLOY_USER}" \
+            "  Port ${PORT}" \
+            "  IdentityFile ~/.ssh/deploy_key" \
+            "  StrictHostKeyChecking accept-new" \
+            > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Prepare remote compose
+        run: |
+          PATH_DIR="${DEPLOY_PATH:-/opt/driver-hub}"
+          ssh deploy-target "mkdir -p '$PATH_DIR' && (command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh)"
+          scp deploy/docker-compose.yml deploy/Caddyfile deploy-target:"$PATH_DIR/"
+          {
+            echo "IMAGE_API=${IMAGE_API}:${APP_VERSION}"
+            echo "IMAGE_WEB=${IMAGE_WEB}:${APP_VERSION}"
+            echo "DOMAIN=${DOMAIN}"
+            echo "ACME_EMAIL=${ACME_EMAIL}"
+            echo "JWT_SECRET=${JWT_SECRET}"
+            echo "PUBLIC_BASE_URL=https://${DOMAIN}"
+            echo "POSTGRES_PASSWORD=${JWT_SECRET}"
+          } > /tmp/driver-hub.env
+          scp /tmp/driver-hub.env deploy-target:"$PATH_DIR/.env"
+
+      - name: Pull image and restart
+        run: |
+          PATH_DIR="${DEPLOY_PATH:-/opt/driver-hub}"
+          if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
+            ssh deploy-target "echo '$GHCR_PULL_TOKEN' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin"
+          fi
+          ssh deploy-target "cd '$PATH_DIR' && docker compose pull && docker compose up -d --remove-orphans && docker compose ps"
+
+          ssh deploy-target "PATH_DIR='$PATH_DIR' bash -s" <<'REMOTE'
+          set -e
+          cd "$PATH_DIR"
+          for i in $(seq 1 40); do
+            if curl -fsS -o /dev/null http://127.0.0.1/healthz; then
+              echo "healthz ok (try $i)"
+              curl -fsS http://127.0.0.1/healthz; echo
+              exit 0
+            fi
+            echo "wait healthz ($i/40)..."
+            docker compose ps -a || true
+            sleep 3
+          done
+          echo "==== compose ps ===="
+          docker compose ps -a
+          echo "==== logs ===="
+          docker compose logs --tail=200
+          exit 1
+          REMOTE
+
+      - name: Summary
+        run: |
+          echo "api=${IMAGE_API}:${APP_VERSION}"
+          echo "web=${IMAGE_WEB}:${APP_VERSION}"
+          echo "https://${DOMAIN}/"
+          echo "https://${DOMAIN}/driver"
+          echo "https://${DOMAIN}/company"
+          echo "demo driver: driver@demo.ru / demo1234"
+          echo "demo company: hr@logplus.ru / demo1234"
