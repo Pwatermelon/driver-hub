@@ -1,0 +1,65 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: driverhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-driverhub}
+      POSTGRES_DB: driverhub
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U driverhub -d driverhub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    image: ${IMAGE_API}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://driverhub:${POSTGRES_PASSWORD:-driverhub}@db:5432/driverhub?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      ESIA_MODE: ${ESIA_MODE:-mock}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}}
+      HTTP_ADDR: ":8080"
+      SEED_DEMO: ${SEED_DEMO:-true}
+      MIGRATIONS_PATH: /app/migrations/001_init.sql
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8080"
+
+  web:
+    image: ${IMAGE_WEB}
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      - api
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

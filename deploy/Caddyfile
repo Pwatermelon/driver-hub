@@ -1,0 +1,40 @@
+{
+	email {$ACME_EMAIL}
+}
+
+:80 {
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}
+
+{$DOMAIN:localhost} {
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options SAMEORIGIN
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

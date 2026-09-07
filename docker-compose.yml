@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: driverhub
+      POSTGRES_PASSWORD: driverhub
+      POSTGRES_DB: driverhub
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U driverhub -d driverhub"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://driverhub:driverhub@db:5432/driverhub?sslmode=disable
+      JWT_SECRET: dev-secret-change-me
+      ESIA_MODE: mock
+      VISION_MODE: mock
+      PUBLIC_BASE_URL: http://localhost
+      HTTP_ADDR: ":8080"
+      SEED_DEMO: "true"
+      MIGRATIONS_PATH: /app/migrations/001_init.sql
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
