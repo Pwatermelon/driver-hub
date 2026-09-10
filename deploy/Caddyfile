@@ -4,7 +4,7 @@
 
 :80 {
 	handle /healthz {
-		reverse_proxy api:8080
+		reverse_proxy web:80
 	}
 	handle {
 		redir https://{host}{uri} permanent
@@ -12,8 +12,6 @@
 }
 
 {$DOMAIN:localhost} {
-	encode gzip zstd
-
 	header {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
@@ -21,16 +19,14 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	}
 
-	handle /api/* {
-		reverse_proxy api:8080
-	}
-
-	handle /healthz {
-		reverse_proxy api:8080
-	}
-
+	# Весь трафик в web (nginx): статика + /api и /healthz проксируются на api
+	# Не используем zstd — Safari даёт "Load failed"
 	handle {
-		reverse_proxy web:80
+		encode gzip
+		reverse_proxy web:80 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
 	}
 
 	log {

@@ -197,13 +197,16 @@ jobs:
           set -e
           cd "$PATH_DIR"
           for i in $(seq 1 40); do
-            if curl -fsS -o /dev/null http://127.0.0.1/healthz; then
+            if curl -fsS -o /dev/null http://127.0.0.1/healthz \
+              && docker compose exec -T api wget -q -O - http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
               echo "healthz ok (try $i)"
               curl -fsS http://127.0.0.1/healthz; echo
+              docker compose ps
               exit 0
             fi
             echo "wait healthz ($i/40)..."
             docker compose ps -a || true
+            docker compose logs --tail=30 api || true
             sleep 3
           done
           echo "==== compose ps ===="

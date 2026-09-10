@@ -18,7 +18,8 @@ func NewRouter(h *Handler, tm *auth.TokenManager) http.Handler {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		AllowCredentials: true,
+		AllowCredentials: false,
+		MaxAge:           300,
 	}))
 
 	r.Get("/healthz", h.Health)
