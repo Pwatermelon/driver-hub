@@ -19,13 +19,13 @@ services:
     pull_policy: always
     restart: unless-stopped
     environment:
-      # Пароль передаём отдельно — api сам соберёт URL с encoding
+      # Не передаём DATABASE_URL из .env — там часто битый URL с @ в пароле.
+      # api собирает DSN из POSTGRES_* сам (url-encoding).
       POSTGRES_USER: driverhub
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-driverhub}
       POSTGRES_DB: driverhub
       DB_HOST: db
       DB_PORT: "5432"
-      DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
       ESIA_MODE: ${ESIA_MODE:-mock}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}}
@@ -37,12 +37,6 @@ services:
         condition: service_healthy
     expose:
       - "8080"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 15s
 
   web:
     image: ${IMAGE_WEB}
@@ -50,7 +44,7 @@ services:
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started
     expose:
       - "80"
 

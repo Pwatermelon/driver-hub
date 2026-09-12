@@ -198,9 +198,14 @@ jobs:
           ssh deploy-target "PATH_DIR='$PATH_DIR' bash -s" <<'REMOTE'
           set -e
           cd "$PATH_DIR"
+          # На всякий случай убрать битый DATABASE_URL из .env (пароль с @)
+          if [[ -f .env ]]; then
+            grep -v '^DATABASE_URL=' .env > .env.tmp && mv .env.tmp .env
+          fi
+          docker compose up -d --remove-orphans
           for i in $(seq 1 40); do
-            if curl -fsS -o /dev/null http://127.0.0.1/healthz \
-              && docker compose exec -T api wget -q -O - http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+            if docker compose exec -T api curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 \
+              && curl -fsS -o /dev/null http://127.0.0.1/healthz; then
               echo "healthz ok (try $i)"
               curl -fsS http://127.0.0.1/healthz; echo
               docker compose ps
@@ -208,7 +213,7 @@ jobs:
             fi
             echo "wait healthz ($i/40)..."
             docker compose ps -a || true
-            docker compose logs --tail=30 api || true
+            docker compose logs --tail=40 api || true
             sleep 3
           done
           echo "==== compose ps ===="
