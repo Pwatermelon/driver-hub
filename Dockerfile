@@ -12,6 +12,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /out/driver-hub /app/driver-hub
 COPY migrations /app/migrations
+
 ENV MIGRATIONS_PATH=/app/migrations/001_init.sql
 ENV HTTP_ADDR=:8080
 EXPOSE 8080
