@@ -176,7 +176,6 @@ jobs:
           ssh deploy-target "mkdir -p '$PATH_DIR' && (command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh)"
           scp deploy/docker-compose.yml deploy/Caddyfile deploy-target:"$PATH_DIR/"
           PG_PASS="${POSTGRES_PASSWORD:-driverhub}"
-          PG_PASS_ENC="$(P="$PG_PASS" python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["P"], safe=""))')"
           {
             echo "IMAGE_API=${IMAGE_API}:${APP_VERSION}"
             echo "IMAGE_WEB=${IMAGE_WEB}:${APP_VERSION}"
@@ -184,7 +183,6 @@ jobs:
             echo "ACME_EMAIL=${ACME_EMAIL}"
             echo "JWT_SECRET=${JWT_SECRET}"
             echo "POSTGRES_PASSWORD=${PG_PASS}"
-            echo "DATABASE_URL=postgres://driverhub:${PG_PASS_ENC}@db:5432/driverhub?sslmode=disable"
             echo "PUBLIC_BASE_URL=https://${DOMAIN}"
           } > /tmp/driver-hub.env
           scp /tmp/driver-hub.env deploy-target:"$PATH_DIR/.env"

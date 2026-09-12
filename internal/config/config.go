@@ -104,7 +104,7 @@ func getEnv(key, fallback string) string {
 }
 
 func getDurationEnv(key string, fallback time.Duration) time.Duration {
-	v = os.Getenv(key)
+	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
