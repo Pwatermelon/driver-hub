@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -35,7 +37,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		HTTPAddr:            getEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:         getEnv("DATABASE_URL", "postgres://driverhub:driverhub@localhost:5432/driverhub?sslmode=disable"),
+		DatabaseURL:         resolveDatabaseURL(),
 		JWTSecret:           getEnv("JWT_SECRET", "dev-secret-change-me-in-production"),
 		JWTExpiry:           getDurationEnv("JWT_EXPIRY", 24*time.Hour),
 		ESIAMode:            getEnv("ESIA_MODE", "mock"),
@@ -59,6 +61,41 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// resolveDatabaseURL собирает DSN с url.UserPassword, чтобы @ # / в пароле не ломали URL.
+// Приоритет: DB_* / POSTGRES_PASSWORD → иначе DATABASE_URL как есть.
+func resolveDatabaseURL() string {
+	pass := firstNonEmpty(os.Getenv("DB_PASSWORD"), os.Getenv("POSTGRES_PASSWORD"))
+	user := firstNonEmpty(os.Getenv("DB_USER"), os.Getenv("POSTGRES_USER"), "driverhub")
+	host := firstNonEmpty(os.Getenv("DB_HOST"), "db")
+	port := firstNonEmpty(os.Getenv("DB_PORT"), "5432")
+	name := firstNonEmpty(os.Getenv("DB_NAME"), os.Getenv("POSTGRES_DB"), "driverhub")
+	ssl := firstNonEmpty(os.Getenv("DB_SSLMODE"), "disable")
+
+	if pass != "" {
+		u := &url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(user, pass),
+			Host:   fmt.Sprintf("%s:%s", host, port),
+			Path:   "/" + name,
+		}
+		q := u.Query()
+		q.Set("sslmode", ssl)
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+
+	return getEnv("DATABASE_URL", "postgres://driverhub:driverhub@localhost:5432/driverhub?sslmode=disable")
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -67,7 +104,7 @@ func getEnv(key, fallback string) string {
 }
 
 func getDurationEnv(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
+	v = os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
