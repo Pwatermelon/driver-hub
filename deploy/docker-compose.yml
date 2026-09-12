@@ -19,8 +19,13 @@ services:
     pull_policy: always
     restart: unless-stopped
     environment:
-      # DATABASE_URL целиком из .env (пароль уже URL-encoded)
-      DATABASE_URL: ${DATABASE_URL}
+      # Пароль передаём отдельно — api сам соберёт URL с encoding
+      POSTGRES_USER: driverhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-driverhub}
+      POSTGRES_DB: driverhub
+      DB_HOST: db
+      DB_PORT: "5432"
+      DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
       ESIA_MODE: ${ESIA_MODE:-mock}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}}
