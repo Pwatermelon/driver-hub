@@ -23,13 +23,46 @@ var 1.0.0
 | `DEPLOY_HOST` | IP/хост сервера |
 | `DEPLOY_USER` | SSH user |
 | `SSH_PRIVATE_KEY` | приватный SSH-ключ |
-| `JWT_SECRET` | секрет JWT (+ пароль Postgres в проде) |
+| `JWT_SECRET` | секрет JWT |
+| `POSTGRES_PASSWORD` | опционально; иначе `driverhub` (не используй JWT как пароль БД) |
 | `DEPLOY_PATH` | опционально, по умолчанию `/opt/driver-hub` |
 | `SSH_PORT` | опционально, `22` |
 | `GHCR_PULL_TOKEN` | PAT `read:packages`, если образ private |
 
-После первого пуша: GitHub → Packages → пакет → Visibility → Public  
-(или оставь private и задай `GHCR_PULL_TOKEN`).
+## Если на сайте «Load failed» / API 502
+
+На сервере:
+
+```bash
+cd /opt/driver-hub
+docker compose ps -a
+docker compose logs --tail=100 api
+```
+
+Частая причина: `api` в restart из‑за битого `DATABASE_URL` (раньше пароль БД = JWT со спецсимволами).
+
+Починка вручную:
+
+```bash
+cd /opt/driver-hub
+# в .env должно быть:
+# POSTGRES_PASSWORD=driverhub
+# DATABASE_URL=postgres://driverhub:driverhub@db:5432/driverhub?sslmode=disable
+# IMAGE_API=... IMAGE_WEB=...
+
+docker compose up -d --force-recreate api
+curl -sS http://127.0.0.1/healthz
+```
+
+Если Postgres уже инициализирован другим паролем и api пишет `password authentication failed` — либо верни старый пароль в `.env`, либо (с потерей данных демо):
+
+```bash
+docker compose down
+docker volume rm driver-hub_pgdata   # имя уточни: docker volume ls | grep pg
+docker compose up -d
+```
+
+Деплой только с версией в коммите: `var 0.1.1` (иначе Actions **не выкатывает**).
 
 ## На сервере после деплоя
 

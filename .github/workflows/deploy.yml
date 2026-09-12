@@ -140,6 +140,7 @@ jobs:
       SSH_PORT: ${{ secrets.SSH_PORT }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       APP_VERSION: ${{ needs.build.outputs.version }}
       IMAGE_API: ${{ needs.build.outputs.image_api }}
       IMAGE_WEB: ${{ needs.build.outputs.image_web }}
@@ -174,14 +175,17 @@ jobs:
           PATH_DIR="${DEPLOY_PATH:-/opt/driver-hub}"
           ssh deploy-target "mkdir -p '$PATH_DIR' && (command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh)"
           scp deploy/docker-compose.yml deploy/Caddyfile deploy-target:"$PATH_DIR/"
+          PG_PASS="${POSTGRES_PASSWORD:-driverhub}"
+          PG_PASS_ENC="$(P="$PG_PASS" python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["P"], safe=""))')"
           {
             echo "IMAGE_API=${IMAGE_API}:${APP_VERSION}"
             echo "IMAGE_WEB=${IMAGE_WEB}:${APP_VERSION}"
             echo "DOMAIN=${DOMAIN}"
             echo "ACME_EMAIL=${ACME_EMAIL}"
             echo "JWT_SECRET=${JWT_SECRET}"
+            echo "POSTGRES_PASSWORD=${PG_PASS}"
+            echo "DATABASE_URL=postgres://driverhub:${PG_PASS_ENC}@db:5432/driverhub?sslmode=disable"
             echo "PUBLIC_BASE_URL=https://${DOMAIN}"
-            echo "POSTGRES_PASSWORD=${JWT_SECRET}"
           } > /tmp/driver-hub.env
           scp /tmp/driver-hub.env deploy-target:"$PATH_DIR/.env"
 
