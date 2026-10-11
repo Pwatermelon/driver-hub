@@ -45,6 +45,11 @@ docker compose up -d db api
 cd frontend && npm run dev
 ```
 
+## Госуслуги (ЕСИА)
+
+- Техническое описание и scope: [docs/ESIA.md](docs/ESIA.md)
+- Заявка на подключение: [docs/ESIA_APPLICATION.md](docs/ESIA_APPLICATION.md)
+
 ## Деплой
 
 `var 1.0.0` → GHCR (`*-api` + `*-web`) → сервер  
