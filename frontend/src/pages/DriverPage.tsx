@@ -244,7 +244,7 @@ export function DriverPage() {
       <section className="card">
         <h2>Работа в компаниях</h2>
         <p className="sub" style={{ marginBottom: 14 }}>
-          Компания указывает, что вы у неё работаете — подтвердите или отклоните запрос. Можно работать в нескольких компаниях.
+          Компания указывает, что вы у неё работаете — подтвердите или отклоните запрос.
         </p>
         <Alert kind="error">{empError}</Alert>
         <ul className="list">
