@@ -135,13 +135,15 @@ export function CompanyPage() {
     }
   }
 
-  async function loadDossier(e?: FormEvent) {
-    e?.preventDefault()
+  async function openDossier(hubID: string) {
+    const id = hubID.trim()
+    if (!id) return
+    setHub(id)
     setError('')
     setOkMsg('')
     setSearching(true)
     try {
-      setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(hub.trim())}/dossier`, { token }))
+      setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(id)}/dossier`, { token }))
       await refreshEmployments()
     } catch (err) {
       setDossier(null)
@@ -149,6 +151,11 @@ export function CompanyPage() {
     } finally {
       setSearching(false)
     }
+  }
+
+  async function loadDossier(e?: FormEvent) {
+    e?.preventDefault()
+    await openDossier(hub)
   }
 
   async function claimEmployment() {
@@ -246,9 +253,17 @@ export function CompanyPage() {
               .filter((e) => e.status === 'pending' || e.status === 'confirmed')
               .map((e) => (
                 <li key={e.id}>
-                  <b>{e.driver_name || 'Водитель'}</b> · {e.driver_hub_id}
-                  <br />
-                  <span className="sub">{empLabel(e.status)}</span>
+                  <button
+                    type="button"
+                    className="text-btn"
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0 }}
+                    disabled={!e.driver_hub_id || searching}
+                    onClick={() => void openDossier(e.driver_hub_id || '')}
+                  >
+                    <b>{e.driver_name || 'Водитель'}</b> · {e.driver_hub_id}
+                    <br />
+                    <span className="sub">{empLabel(e.status)}</span>
+                  </button>
                 </li>
               ))}
           </ul>
