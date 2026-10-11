@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, errMessage } from '../api/client'
-import type { Driver } from '../api/types'
+import type { Driver, Employment } from '../api/types'
 import { AuthPanel } from '../components/AuthPanel'
-import { Badge, Facts, Field, Shell } from '../components/ui'
+import { Alert, Badge, Facts, Field, Shell } from '../components/ui'
 
 const TOKEN_KEY = 'dh_driver_token'
 
@@ -18,6 +18,8 @@ export function DriverPage() {
   const [authError, setAuthError] = useState('')
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [employments, setEmployments] = useState<Employment[]>([])
+  const [empError, setEmpError] = useState('')
 
   useEffect(() => {
     const t = params.get('token')
@@ -35,15 +37,22 @@ export function DriverPage() {
     }
     let cancelled = false
     setBooting(true)
-    api<Driver>('/api/v1/me/driver', { token })
-      .then((d) => {
-        if (!cancelled) setDriver(d)
+    Promise.all([
+      api<Driver>('/api/v1/me/driver', { token }),
+      api<Employment[]>('/api/v1/me/employments', { token }).catch(() => [] as Employment[]),
+    ])
+      .then(([d, emps]) => {
+        if (!cancelled) {
+          setDriver(d)
+          setEmployments(emps)
+        }
       })
       .catch(() => {
         if (!cancelled) {
           localStorage.removeItem(TOKEN_KEY)
           setToken('')
           setDriver(null)
+          setEmployments([])
         }
       })
       .finally(() => {
@@ -53,6 +62,25 @@ export function DriverPage() {
       cancelled = true
     }
   }, [token])
+
+  async function refreshEmployments() {
+    try {
+      setEmployments(await api<Employment[]>('/api/v1/me/employments', { token }))
+      setEmpError('')
+    } catch (err) {
+      setEmpError(errMessage(err))
+    }
+  }
+
+  async function respondEmployment(id: string, action: 'confirm' | 'reject' | 'end') {
+    setEmpError('')
+    try {
+      await api(`/api/v1/me/employments/${id}/${action}`, { method: 'POST', token })
+      await refreshEmployments()
+    } catch (err) {
+      setEmpError(errMessage(err))
+    }
+  }
 
   const qrValue = useMemo(() => {
     if (!driver) return ''
@@ -107,6 +135,7 @@ export function DriverPage() {
     localStorage.removeItem(TOKEN_KEY)
     setToken('')
     setDriver(null)
+    setEmployments([])
   }
 
   async function copyHub() {
@@ -210,6 +239,56 @@ export function DriverPage() {
           </div>
           <p>Покажите QR компании для идентификации</p>
         </div>
+      </section>
+
+      <section className="card">
+        <h2>Работа в компаниях</h2>
+        <p className="sub" style={{ marginBottom: 14 }}>
+          Компания указывает, что вы у неё работаете — подтвердите или отклоните запрос. Можно работать в нескольких компаниях.
+        </p>
+        <Alert kind="error">{empError}</Alert>
+        <ul className="list">
+          {!employments.length ? (
+            <li className="empty">пока нет запросов</li>
+          ) : (
+            employments.map((e) => (
+              <li key={e.id}>
+                <div className="card-head">
+                  <div>
+                    <b>{e.company_name || 'Компания'}</b>
+                    <p className="sub" style={{ margin: '4px 0 0' }}>
+                      {
+                        {
+                          pending: 'ожидает вашего подтверждения',
+                          confirmed: 'подтверждено',
+                          rejected: 'отклонено',
+                          ended: 'завершено',
+                        }[e.status] || e.status
+                      }
+                    </p>
+                  </div>
+                  <div className="actions">
+                    {e.status === 'pending' && (
+                      <>
+                        <button type="button" className="btn btn-primary" onClick={() => respondEmployment(e.id, 'confirm')}>
+                          Подтвердить
+                        </button>
+                        <button type="button" className="btn" onClick={() => respondEmployment(e.id, 'reject')}>
+                          Отклонить
+                        </button>
+                      </>
+                    )}
+                    {e.status === 'confirmed' && (
+                      <button type="button" className="btn" onClick={() => respondEmployment(e.id, 'end')}>
+                        Завершить
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))
+          )}
+        </ul>
       </section>
     </Shell>
   )

@@ -1,4 +1,4 @@
-export type Role = 'driver' | 'company'
+export type Role = 'driver' | 'company' | 'admin'
 
 export interface Driver {
   id: string
@@ -38,6 +38,20 @@ export interface Company {
   email: string
   phone?: string
   verified: boolean
+  moderation_status: 'pending' | 'approved' | 'rejected' | string
+}
+
+export interface Employment {
+  id: string
+  driver_id: string
+  company_id: string
+  status: 'pending' | 'confirmed' | 'rejected' | 'ended' | string
+  claimed_at: string
+  confirmed_at?: string
+  ended_at?: string
+  company_name?: string
+  driver_hub_id?: string
+  driver_name?: string
 }
 
 export interface LicenseDraft {
@@ -64,6 +78,7 @@ export interface DriverDossier {
   accidents: Array<{ id: string; description: string; fault: string; damage_level: string }>
   fines: Array<{ id: string; article?: string; amount: number; paid: boolean }>
   blacklisted_by_viewer: boolean
+  viewer_employment?: Employment
   grant?: { id: string; purpose: string; active: boolean }
 }
 

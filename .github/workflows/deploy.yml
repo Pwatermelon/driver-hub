@@ -140,6 +140,7 @@ jobs:
       SSH_PORT: ${{ secrets.SSH_PORT }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       APP_VERSION: ${{ needs.build.outputs.version }}
       IMAGE_API: ${{ needs.build.outputs.image_api }}
@@ -182,6 +183,7 @@ jobs:
             echo "DOMAIN=${DOMAIN}"
             echo "ACME_EMAIL=${ACME_EMAIL}"
             echo "JWT_SECRET=${JWT_SECRET}"
+            echo "ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin-change-me}"
             echo "POSTGRES_PASSWORD=${PG_PASS}"
             echo "PUBLIC_BASE_URL=https://${DOMAIN}"
           } > /tmp/driver-hub.env

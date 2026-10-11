@@ -27,6 +27,7 @@ services:
       DB_HOST: db
       DB_PORT: "5432"
       JWT_SECRET: ${JWT_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-change-me}
       ESIA_MODE: ${ESIA_MODE:-mock}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}}
       HTTP_ADDR: ":8080"

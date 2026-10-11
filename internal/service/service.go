@@ -17,14 +17,15 @@ import (
 )
 
 type Service struct {
-	store  *postgres.Store
-	tokens *auth.TokenManager
-	esia   esia.Client
-	vision vision.Scanner
+	store         *postgres.Store
+	tokens        *auth.TokenManager
+	esia          esia.Client
+	vision        vision.Scanner
+	adminPassword string
 }
 
-func New(store *postgres.Store, tokens *auth.TokenManager, esiaClient esia.Client, visionScanner vision.Scanner) *Service {
-	return &Service{store: store, tokens: tokens, esia: esiaClient, vision: visionScanner}
+func New(store *postgres.Store, tokens *auth.TokenManager, esiaClient esia.Client, visionScanner vision.Scanner, adminPassword string) *Service {
+	return &Service{store: store, tokens: tokens, esia: esiaClient, vision: visionScanner, adminPassword: adminPassword}
 }
 
 func normalizeEmail(email string) string {
@@ -66,7 +67,10 @@ func (s *Service) RegisterCompany(ctx context.Context, name, inn, ogrn, email, p
 	if err != nil {
 		return nil, "", fmt.Errorf("не удалось сохранить пароль")
 	}
-	c := &domain.Company{Name: name, INN: inn, OGRN: ogrn, Email: email, Phone: phone, PasswordHash: hash, Verified: false}
+	c := &domain.Company{
+		Name: name, INN: inn, OGRN: ogrn, Email: email, Phone: phone, PasswordHash: hash,
+		Verified: false, ModerationStatus: domain.ModerationPending,
+	}
 	if err := s.store.CreateCompany(ctx, c); err != nil {
 		return nil, "", mapDBErr(err, "не удалось создать компанию")
 	}
@@ -326,13 +330,167 @@ func (s *Service) GetDossier(ctx context.Context, companyID uuid.UUID, hub strin
 	if fines == nil {
 		fines = []domain.Fine{}
 	}
+	emp, _ := s.store.GetEmploymentByPair(ctx, d.ID, companyID)
 	return &domain.DriverDossier{
 		Driver: *d, Recommendations: recs, Complaints: cmps, BlacklistEntries: bls,
-		Accidents: accs, Fines: fines, BlacklistedByViewer: mine,
+		Accidents: accs, Fines: fines, BlacklistedByViewer: mine, ViewerEmployment: emp,
 	}, nil
 }
 
+func (s *Service) requireApprovedCompany(ctx context.Context, companyID uuid.UUID) (*domain.Company, error) {
+	c, err := s.store.GetCompanyByID(ctx, companyID)
+	if err != nil || c == nil {
+		return nil, fmt.Errorf("компания не найдена")
+	}
+	if c.ModerationStatus != domain.ModerationApproved {
+		return nil, fmt.Errorf("компания ещё не прошла модерацию")
+	}
+	return c, nil
+}
+
+func (s *Service) requireConfirmedEmployment(ctx context.Context, companyID, driverID uuid.UUID) error {
+	if _, err := s.requireApprovedCompany(ctx, companyID); err != nil {
+		return err
+	}
+	ok, err := s.store.HasConfirmedEmployment(ctx, driverID, companyID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("нужно подтверждённое трудоустройство: компания указывает водителя, водитель подтверждает")
+	}
+	return nil
+}
+
+func (s *Service) ClaimEmployment(ctx context.Context, companyID uuid.UUID, hub string) (*domain.Employment, error) {
+	if _, err := s.requireApprovedCompany(ctx, companyID); err != nil {
+		return nil, err
+	}
+	driverID, err := s.ResolveDriverID(ctx, hub)
+	if err != nil {
+		return nil, err
+	}
+	if existing, _ := s.store.GetEmploymentByPair(ctx, driverID, companyID); existing != nil && existing.Status == domain.EmploymentConfirmed {
+		return existing, nil
+	}
+	e, err := s.store.UpsertEmploymentClaim(ctx, driverID, companyID)
+	if err != nil {
+		return nil, mapDBErr(err, "не удалось отправить запрос на трудоустройство")
+	}
+	full, _ := s.store.GetEmployment(ctx, e.ID)
+	if full != nil {
+		return full, nil
+	}
+	return e, nil
+}
+
+func (s *Service) ListCompanyEmployments(ctx context.Context, companyID uuid.UUID) ([]domain.Employment, error) {
+	list, err := s.store.ListEmploymentsByCompany(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []domain.Employment{}
+	}
+	return list, nil
+}
+
+func (s *Service) ListDriverEmployments(ctx context.Context, driverID uuid.UUID) ([]domain.Employment, error) {
+	list, err := s.store.ListEmploymentsByDriver(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []domain.Employment{}
+	}
+	return list, nil
+}
+
+func (s *Service) ConfirmEmployment(ctx context.Context, driverID, employmentID uuid.UUID) (*domain.Employment, error) {
+	e, err := s.store.GetEmployment(ctx, employmentID)
+	if err != nil || e == nil {
+		return nil, fmt.Errorf("запрос не найден")
+	}
+	if e.DriverID != driverID {
+		return nil, fmt.Errorf("недостаточно прав")
+	}
+	if e.Status != domain.EmploymentPending {
+		return nil, fmt.Errorf("запрос уже обработан")
+	}
+	return s.store.SetEmploymentStatus(ctx, employmentID, domain.EmploymentConfirmed)
+}
+
+func (s *Service) RejectEmployment(ctx context.Context, driverID, employmentID uuid.UUID) (*domain.Employment, error) {
+	e, err := s.store.GetEmployment(ctx, employmentID)
+	if err != nil || e == nil {
+		return nil, fmt.Errorf("запрос не найден")
+	}
+	if e.DriverID != driverID {
+		return nil, fmt.Errorf("недостаточно прав")
+	}
+	if e.Status != domain.EmploymentPending {
+		return nil, fmt.Errorf("запрос уже обработан")
+	}
+	return s.store.SetEmploymentStatus(ctx, employmentID, domain.EmploymentRejected)
+}
+
+func (s *Service) EndEmployment(ctx context.Context, actorID uuid.UUID, role domain.Role, employmentID uuid.UUID) (*domain.Employment, error) {
+	e, err := s.store.GetEmployment(ctx, employmentID)
+	if err != nil || e == nil {
+		return nil, fmt.Errorf("связь не найдена")
+	}
+	switch role {
+	case domain.RoleDriver:
+		if e.DriverID != actorID {
+			return nil, fmt.Errorf("недостаточно прав")
+		}
+	case domain.RoleCompany:
+		if e.CompanyID != actorID {
+			return nil, fmt.Errorf("недостаточно прав")
+		}
+	default:
+		return nil, fmt.Errorf("недостаточно прав")
+	}
+	if e.Status != domain.EmploymentConfirmed && e.Status != domain.EmploymentPending {
+		return nil, fmt.Errorf("нельзя завершить эту связь")
+	}
+	return s.store.SetEmploymentStatus(ctx, employmentID, domain.EmploymentEnded)
+}
+
+func (s *Service) LoginAdmin(password string) (string, error) {
+	if s.adminPassword == "" || password == "" || password != s.adminPassword {
+		return "", fmt.Errorf("неверный пароль")
+	}
+	return s.tokens.Issue(uuid.Nil, domain.RoleAdmin, "admin")
+}
+
+func (s *Service) ListCompaniesAdmin(ctx context.Context, status domain.ModerationStatus) ([]domain.Company, error) {
+	list, err := s.store.ListCompanies(ctx, status)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []domain.Company{}
+	}
+	return list, nil
+}
+
+func (s *Service) SetCompanyModeration(ctx context.Context, companyID uuid.UUID, status domain.ModerationStatus) (*domain.Company, error) {
+	switch status {
+	case domain.ModerationApproved, domain.ModerationRejected, domain.ModerationPending:
+	default:
+		return nil, fmt.Errorf("недопустимый статус модерации")
+	}
+	if err := s.store.SetCompanyModeration(ctx, companyID, status); err != nil {
+		return nil, err
+	}
+	return s.store.GetCompanyByID(ctx, companyID)
+}
+
 func (s *Service) AddRecommendation(ctx context.Context, companyID, driverID uuid.UUID, text string, rating int) (*domain.Recommendation, error) {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return nil, err
+	}
 	if rating < 1 || rating > 5 {
 		return nil, fmt.Errorf("rating должен быть 1..5")
 	}
@@ -344,6 +502,9 @@ func (s *Service) AddRecommendation(ctx context.Context, companyID, driverID uui
 }
 
 func (s *Service) AddComplaint(ctx context.Context, companyID, driverID uuid.UUID, category, text, severity string) (*domain.Complaint, error) {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return nil, err
+	}
 	c := &domain.Complaint{DriverID: driverID, CompanyID: companyID, Category: category, Text: text, Severity: severity}
 	if err := s.store.AddComplaint(ctx, c); err != nil {
 		return nil, err
@@ -352,6 +513,9 @@ func (s *Service) AddComplaint(ctx context.Context, companyID, driverID uuid.UUI
 }
 
 func (s *Service) AddToBlacklist(ctx context.Context, companyID, driverID uuid.UUID, reason string) (*domain.BlacklistEntry, error) {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return nil, err
+	}
 	b := &domain.BlacklistEntry{DriverID: driverID, CompanyID: companyID, Reason: reason}
 	if err := s.store.UpsertBlacklist(ctx, b); err != nil {
 		return nil, err
@@ -360,10 +524,16 @@ func (s *Service) AddToBlacklist(ctx context.Context, companyID, driverID uuid.U
 }
 
 func (s *Service) LiftBlacklist(ctx context.Context, companyID, driverID uuid.UUID) error {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return err
+	}
 	return s.store.LiftBlacklist(ctx, driverID, companyID)
 }
 
 func (s *Service) AddAccident(ctx context.Context, companyID, driverID uuid.UUID, occurredAt time.Time, description, fault, damage, location string) (*domain.Accident, error) {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return nil, err
+	}
 	cid := companyID
 	a := &domain.Accident{
 		DriverID: driverID, CompanyID: &cid, OccurredAt: occurredAt,
@@ -376,6 +546,9 @@ func (s *Service) AddAccident(ctx context.Context, companyID, driverID uuid.UUID
 }
 
 func (s *Service) AddFine(ctx context.Context, companyID, driverID uuid.UUID, article string, amount float64, issued *time.Time, paid bool, description string) (*domain.Fine, error) {
+	if err := s.requireConfirmedEmployment(ctx, companyID, driverID); err != nil {
+		return nil, err
+	}
 	cid := companyID
 	f := &domain.Fine{
 		DriverID: driverID, CompanyID: &cid, Article: article, Amount: amount,

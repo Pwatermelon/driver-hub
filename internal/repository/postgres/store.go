@@ -22,41 +22,97 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 func (s *Store) CreateCompany(ctx context.Context, c *domain.Company) error {
+	if c.ModerationStatus == "" {
+		if c.Verified {
+			c.ModerationStatus = domain.ModerationApproved
+		} else {
+			c.ModerationStatus = domain.ModerationPending
+		}
+	}
+	c.Verified = c.ModerationStatus == domain.ModerationApproved
 	return s.pool.QueryRow(ctx, `
-		INSERT INTO companies (name, inn, ogrn, email, phone, password_hash, verified)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO companies (name, inn, ogrn, email, phone, password_hash, verified, moderation_status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING id, created_at`,
-		c.Name, c.INN, c.OGRN, c.Email, c.Phone, c.PasswordHash, c.Verified,
+		c.Name, c.INN, c.OGRN, c.Email, c.Phone, c.PasswordHash, c.Verified, c.ModerationStatus,
 	).Scan(&c.ID, &c.CreatedAt)
 }
 
-func (s *Store) GetCompanyByEmail(ctx context.Context, email string) (*domain.Company, error) {
+func scanCompany(row pgx.Row) (*domain.Company, error) {
 	var c domain.Company
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified, created_at
-		FROM companies WHERE lower(email)=lower($1)`, email,
-	).Scan(&c.ID, &c.Name, &c.INN, &c.OGRN, &c.Email, &c.Phone, &c.PasswordHash, &c.Verified, &c.CreatedAt)
+	var mod string
+	err := row.Scan(&c.ID, &c.Name, &c.INN, &c.OGRN, &c.Email, &c.Phone, &c.PasswordHash, &c.Verified, &mod, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	return &c, err
+	if err != nil {
+		return nil, err
+	}
+	c.ModerationStatus = domain.ModerationStatus(mod)
+	if c.ModerationStatus == "" {
+		if c.Verified {
+			c.ModerationStatus = domain.ModerationApproved
+		} else {
+			c.ModerationStatus = domain.ModerationPending
+		}
+	}
+	c.Verified = c.ModerationStatus == domain.ModerationApproved
+	return &c, nil
+}
+
+func (s *Store) GetCompanyByEmail(ctx context.Context, email string) (*domain.Company, error) {
+	return scanCompany(s.pool.QueryRow(ctx, `
+		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified,
+		       COALESCE(moderation_status, CASE WHEN verified THEN 'approved' ELSE 'pending' END), created_at
+		FROM companies WHERE lower(email)=lower($1)`, email))
 }
 
 func (s *Store) GetCompanyByID(ctx context.Context, id uuid.UUID) (*domain.Company, error) {
-	var c domain.Company
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified, created_at
-		FROM companies WHERE id=$1`, id,
-	).Scan(&c.ID, &c.Name, &c.INN, &c.OGRN, &c.Email, &c.Phone, &c.PasswordHash, &c.Verified, &c.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	return &c, err
+	return scanCompany(s.pool.QueryRow(ctx, `
+		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified,
+		       COALESCE(moderation_status, CASE WHEN verified THEN 'approved' ELSE 'pending' END), created_at
+		FROM companies WHERE id=$1`, id))
 }
 
 func (s *Store) UpdateCompanyPassword(ctx context.Context, id uuid.UUID, hash string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE companies SET password_hash=$2, verified=TRUE WHERE id=$1`, id, hash)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE companies SET password_hash=$2, verified=TRUE, moderation_status='approved' WHERE id=$1`, id, hash)
 	return err
+}
+
+func (s *Store) SetCompanyModeration(ctx context.Context, id uuid.UUID, status domain.ModerationStatus) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE companies SET moderation_status=$2, verified=($2='approved') WHERE id=$1`, id, status)
+	return err
+}
+
+func (s *Store) ListCompanies(ctx context.Context, status domain.ModerationStatus) ([]domain.Company, error) {
+	q := `
+		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified,
+		       COALESCE(moderation_status, CASE WHEN verified THEN 'approved' ELSE 'pending' END), created_at
+		FROM companies`
+	var rows pgx.Rows
+	var err error
+	if status != "" {
+		rows, err = s.pool.Query(ctx, q+` WHERE moderation_status=$1 ORDER BY created_at DESC`, status)
+	} else {
+		rows, err = s.pool.Query(ctx, q+` ORDER BY created_at DESC`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Company
+	for rows.Next() {
+		c, err := scanCompany(rows)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			out = append(out, *c)
+		}
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) UpdateDriverPassword(ctx context.Context, id uuid.UUID, hash string) error {
@@ -563,6 +619,150 @@ func (s *Store) Audit(ctx context.Context, actorType string, actorID *uuid.UUID,
 	_, _ = s.pool.Exec(ctx, `
 		INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, meta)
 		VALUES ($1,$2,$3,$4,$5,$6::jsonb)`, actorType, actorID, action, entityType, entityID, nullJSON(meta))
+}
+
+func (s *Store) UpsertEmploymentClaim(ctx context.Context, driverID, companyID uuid.UUID) (*domain.Employment, error) {
+	var e domain.Employment
+	var status string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO employments (driver_id, company_id, status, claimed_at)
+		VALUES ($1,$2,'pending',NOW())
+		ON CONFLICT (driver_id, company_id) DO UPDATE SET
+			status = CASE WHEN employments.status = 'confirmed' THEN employments.status ELSE 'pending' END,
+			claimed_at = CASE WHEN employments.status = 'confirmed' THEN employments.claimed_at ELSE NOW() END,
+			confirmed_at = CASE WHEN employments.status = 'confirmed' THEN employments.confirmed_at ELSE NULL END,
+			ended_at = CASE WHEN employments.status = 'confirmed' THEN employments.ended_at ELSE NULL END
+		RETURNING id, driver_id, company_id, status, claimed_at, confirmed_at, ended_at`,
+		driverID, companyID,
+	).Scan(&e.ID, &e.DriverID, &e.CompanyID, &status, &e.ClaimedAt, &e.ConfirmedAt, &e.EndedAt)
+	if err != nil {
+		return nil, err
+	}
+	e.Status = domain.EmploymentStatus(status)
+	return &e, nil
+}
+
+func (s *Store) GetEmployment(ctx context.Context, id uuid.UUID) (*domain.Employment, error) {
+	return scanEmployment(s.pool.QueryRow(ctx, `
+		SELECT e.id, e.driver_id, e.company_id, e.status, e.claimed_at, e.confirmed_at, e.ended_at,
+		       COALESCE(c.name,''), COALESCE(d.hub_id,''),
+		       trim(both ' ' FROM concat_ws(' ', d.last_name, d.first_name, COALESCE(d.middle_name,'')))
+		FROM employments e
+		JOIN companies c ON c.id = e.company_id
+		JOIN drivers d ON d.id = e.driver_id
+		WHERE e.id=$1`, id))
+}
+
+func (s *Store) GetEmploymentByPair(ctx context.Context, driverID, companyID uuid.UUID) (*domain.Employment, error) {
+	return scanEmployment(s.pool.QueryRow(ctx, `
+		SELECT e.id, e.driver_id, e.company_id, e.status, e.claimed_at, e.confirmed_at, e.ended_at,
+		       COALESCE(c.name,''), COALESCE(d.hub_id,''),
+		       trim(both ' ' FROM concat_ws(' ', d.last_name, d.first_name, COALESCE(d.middle_name,'')))
+		FROM employments e
+		JOIN companies c ON c.id = e.company_id
+		JOIN drivers d ON d.id = e.driver_id
+		WHERE e.driver_id=$1 AND e.company_id=$2`, driverID, companyID))
+}
+
+func (s *Store) SetEmploymentStatus(ctx context.Context, id uuid.UUID, status domain.EmploymentStatus) (*domain.Employment, error) {
+	now := time.Now()
+	var err error
+	switch status {
+	case domain.EmploymentConfirmed:
+		_, err = s.pool.Exec(ctx, `
+			UPDATE employments SET status='confirmed', confirmed_at=COALESCE(confirmed_at, $2), ended_at=NULL
+			WHERE id=$1`, id, now)
+	case domain.EmploymentRejected:
+		_, err = s.pool.Exec(ctx, `
+			UPDATE employments SET status='rejected', ended_at=$2 WHERE id=$1`, id, now)
+	case domain.EmploymentEnded:
+		_, err = s.pool.Exec(ctx, `
+			UPDATE employments SET status='ended', ended_at=$2 WHERE id=$1`, id, now)
+	case domain.EmploymentPending:
+		_, err = s.pool.Exec(ctx, `
+			UPDATE employments SET status='pending', confirmed_at=NULL, ended_at=NULL, claimed_at=NOW()
+			WHERE id=$1`, id)
+	default:
+		return nil, fmt.Errorf("неизвестный статус занятости")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetEmployment(ctx, id)
+}
+
+func (s *Store) ListEmploymentsByDriver(ctx context.Context, driverID uuid.UUID) ([]domain.Employment, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id, e.driver_id, e.company_id, e.status, e.claimed_at, e.confirmed_at, e.ended_at,
+		       COALESCE(c.name,''), COALESCE(d.hub_id,''),
+		       trim(both ' ' FROM concat_ws(' ', d.last_name, d.first_name, COALESCE(d.middle_name,'')))
+		FROM employments e
+		JOIN companies c ON c.id = e.company_id
+		JOIN drivers d ON d.id = e.driver_id
+		WHERE e.driver_id=$1
+		ORDER BY e.claimed_at DESC`, driverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectEmployments(rows)
+}
+
+func (s *Store) ListEmploymentsByCompany(ctx context.Context, companyID uuid.UUID) ([]domain.Employment, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id, e.driver_id, e.company_id, e.status, e.claimed_at, e.confirmed_at, e.ended_at,
+		       COALESCE(c.name,''), COALESCE(d.hub_id,''),
+		       trim(both ' ' FROM concat_ws(' ', d.last_name, d.first_name, COALESCE(d.middle_name,'')))
+		FROM employments e
+		JOIN companies c ON c.id = e.company_id
+		JOIN drivers d ON d.id = e.driver_id
+		WHERE e.company_id=$1
+		ORDER BY e.claimed_at DESC`, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectEmployments(rows)
+}
+
+func (s *Store) HasConfirmedEmployment(ctx context.Context, driverID, companyID uuid.UUID) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM employments
+			WHERE driver_id=$1 AND company_id=$2 AND status='confirmed'
+		)`, driverID, companyID,
+	).Scan(&ok)
+	return ok, err
+}
+
+func scanEmployment(row pgx.Row) (*domain.Employment, error) {
+	var e domain.Employment
+	var status string
+	err := row.Scan(&e.ID, &e.DriverID, &e.CompanyID, &status, &e.ClaimedAt, &e.ConfirmedAt, &e.EndedAt,
+		&e.CompanyName, &e.DriverHubID, &e.DriverName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.Status = domain.EmploymentStatus(status)
+	return &e, nil
+}
+
+func collectEmployments(rows pgx.Rows) ([]domain.Employment, error) {
+	var out []domain.Employment
+	for rows.Next() {
+		e, err := scanEmployment(rows)
+		if err != nil {
+			return nil, err
+		}
+		if e != nil {
+			out = append(out, *e)
+		}
+	}
+	return out, rows.Err()
 }
 
 func nullStr(s string) *string {

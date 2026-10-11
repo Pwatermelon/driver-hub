@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -39,6 +40,21 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 		msg = "ошибка сохранения данных"
 	}
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func statusForBizErr(err error) int {
+	if err == nil {
+		return 400
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "модерац"), strings.Contains(msg, "трудоустрой"), strings.Contains(msg, "недостаточно прав"):
+		return 403
+	case strings.Contains(msg, "не найден"):
+		return 404
+	default:
+		return 400
+	}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +307,7 @@ func (h *Handler) AddRecommendation(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.svc.AddRecommendation(r.Context(), claims.SubjectID, driverID, req.Text, req.Rating)
 	if err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 201, item)
@@ -321,7 +337,7 @@ func (h *Handler) AddComplaint(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.svc.AddComplaint(r.Context(), claims.SubjectID, driverID, req.Category, req.Text, req.Severity)
 	if err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 201, item)
@@ -343,7 +359,7 @@ func (h *Handler) AddBlacklist(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.svc.AddToBlacklist(r.Context(), claims.SubjectID, driverID, req.Reason)
 	if err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 201, item)
@@ -357,7 +373,7 @@ func (h *Handler) LiftBlacklist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.LiftBlacklist(r.Context(), claims.SubjectID, driverID); err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "lifted"})
@@ -395,7 +411,7 @@ func (h *Handler) AddAccident(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.svc.AddAccident(r.Context(), claims.SubjectID, driverID, occurred, req.Description, req.Fault, req.DamageLevel, req.Location)
 	if err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 201, item)
@@ -427,7 +443,7 @@ func (h *Handler) AddFine(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.svc.AddFine(r.Context(), claims.SubjectID, driverID, req.Article, req.Amount, issued, req.Paid, req.Description)
 	if err != nil {
-		writeErr(w, 400, err)
+		writeErr(w, statusForBizErr(err), err)
 		return
 	}
 	writeJSON(w, 201, item)
@@ -534,6 +550,150 @@ func (h *Handler) ConfirmLicense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, d)
+}
+
+func (h *Handler) LoginAdmin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	token, err := h.svc.LoginAdmin(req.Password)
+	if err != nil {
+		writeErr(w, 401, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"token": token})
+}
+
+func (h *Handler) AdminListCompanies(w http.ResponseWriter, r *http.Request) {
+	status := domain.ModerationStatus(r.URL.Query().Get("status"))
+	list, err := h.svc.ListCompaniesAdmin(r.Context(), status)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+func (h *Handler) AdminApproveCompany(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	c, err := h.svc.SetCompanyModeration(r.Context(), id, domain.ModerationApproved)
+	if err != nil || c == nil {
+		writeErr(w, 404, fmt.Errorf("компания не найдена"))
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+func (h *Handler) AdminRejectCompany(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	c, err := h.svc.SetCompanyModeration(r.Context(), id, domain.ModerationRejected)
+	if err != nil || c == nil {
+		writeErr(w, 404, fmt.Errorf("компания не найдена"))
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+func (h *Handler) ClaimEmployment(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	item, err := h.svc.ClaimEmployment(r.Context(), claims.SubjectID, chi.URLParam(r, "hubID"))
+	if err != nil {
+		writeErr(w, statusForBizErr(err), err)
+		return
+	}
+	writeJSON(w, 201, item)
+}
+
+func (h *Handler) ListCompanyEmployments(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	list, err := h.svc.ListCompanyEmployments(r.Context(), claims.SubjectID)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+func (h *Handler) ListDriverEmployments(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	list, err := h.svc.ListDriverEmployments(r.Context(), claims.SubjectID)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+func (h *Handler) ConfirmEmployment(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	item, err := h.svc.ConfirmEmployment(r.Context(), claims.SubjectID, id)
+	if err != nil {
+		writeErr(w, statusForBizErr(err), err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (h *Handler) RejectEmployment(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	item, err := h.svc.RejectEmployment(r.Context(), claims.SubjectID, id)
+	if err != nil {
+		writeErr(w, statusForBizErr(err), err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (h *Handler) EndEmploymentDriver(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	item, err := h.svc.EndEmployment(r.Context(), claims.SubjectID, domain.RoleDriver, id)
+	if err != nil {
+		writeErr(w, statusForBizErr(err), err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (h *Handler) EndEmploymentCompany(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFrom(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("некорректный id"))
+		return
+	}
+	item, err := h.svc.EndEmployment(r.Context(), claims.SubjectID, domain.RoleCompany, id)
+	if err != nil {
+		writeErr(w, statusForBizErr(err), err)
+		return
+	}
+	writeJSON(w, 200, item)
 }
 
 func readUpload(r *http.Request, field string) (*vision.ImageInput, error) {

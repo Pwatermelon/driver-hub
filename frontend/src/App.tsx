@@ -3,6 +3,7 @@ import { HomePage } from './pages/HomePage'
 import { DriverPage } from './pages/DriverPage'
 import { DriverVerifyPage } from './pages/DriverVerifyPage'
 import { CompanyPage } from './pages/CompanyPage'
+import { AdminPage } from './pages/AdminPage'
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
       <Route path="/driver" element={<DriverPage />} />
       <Route path="/driver/verify" element={<DriverVerifyPage />} />
       <Route path="/company" element={<CompanyPage />} />
+      <Route path="/admin" element={<AdminPage />} />
       <Route path="/driver.html" element={<Navigate to="/driver" replace />} />
       <Route path="/company.html" element={<Navigate to="/company" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />

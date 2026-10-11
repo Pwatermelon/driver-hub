@@ -104,16 +104,48 @@ type CriminalRecord struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+type ModerationStatus string
+
+const (
+	ModerationPending  ModerationStatus = "pending"
+	ModerationApproved ModerationStatus = "approved"
+	ModerationRejected ModerationStatus = "rejected"
+)
+
+type EmploymentStatus string
+
+const (
+	EmploymentPending   EmploymentStatus = "pending"
+	EmploymentConfirmed EmploymentStatus = "confirmed"
+	EmploymentRejected  EmploymentStatus = "rejected"
+	EmploymentEnded     EmploymentStatus = "ended"
+)
+
 type Company struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	INN          string    `json:"inn"`
-	OGRN         string    `json:"ogrn,omitempty"`
-	Email        string    `json:"email"`
-	Phone        string    `json:"phone,omitempty"`
-	PasswordHash string    `json:"-"`
-	Verified     bool      `json:"verified"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID               uuid.UUID         `json:"id"`
+	Name             string            `json:"name"`
+	INN              string            `json:"inn"`
+	OGRN             string            `json:"ogrn,omitempty"`
+	Email            string            `json:"email"`
+	Phone            string            `json:"phone,omitempty"`
+	PasswordHash     string            `json:"-"`
+	Verified         bool              `json:"verified"` // true если moderation_status=approved
+	ModerationStatus ModerationStatus  `json:"moderation_status"`
+	CreatedAt        time.Time         `json:"created_at"`
+}
+
+// Employment — связь «водитель работает в компании» (claim → confirm).
+type Employment struct {
+	ID            uuid.UUID        `json:"id"`
+	DriverID      uuid.UUID        `json:"driver_id"`
+	CompanyID     uuid.UUID        `json:"company_id"`
+	Status        EmploymentStatus `json:"status"`
+	ClaimedAt     time.Time        `json:"claimed_at"`
+	ConfirmedAt   *time.Time       `json:"confirmed_at,omitempty"`
+	EndedAt       *time.Time       `json:"ended_at,omitempty"`
+	CompanyName   string           `json:"company_name,omitempty"`
+	DriverHubID   string           `json:"driver_hub_id,omitempty"`
+	DriverName    string           `json:"driver_name,omitempty"`
 }
 
 type AccessGrant struct {
@@ -185,7 +217,7 @@ type Fine struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-// DriverDossier — полный досье для компании при наличии согласия.
+// DriverDossier — полный досье для компании.
 type DriverDossier struct {
 	Driver              Driver           `json:"driver"`
 	Recommendations     []Recommendation `json:"recommendations"`
@@ -194,6 +226,7 @@ type DriverDossier struct {
 	Accidents           []Accident       `json:"accidents"`
 	Fines               []Fine           `json:"fines"`
 	BlacklistedByViewer bool             `json:"blacklisted_by_viewer"`
+	ViewerEmployment    *Employment      `json:"viewer_employment,omitempty"`
 	Grant               *AccessGrant     `json:"grant,omitempty"`
 }
 
