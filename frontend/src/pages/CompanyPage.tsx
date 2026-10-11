@@ -1,11 +1,28 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, errMessage } from '../api/client'
-import type { Company, DriverDossier } from '../api/types'
+import type { Company, DriverDossier, Employment } from '../api/types'
 import { AuthPanel } from '../components/AuthPanel'
 import { Alert, Badge, Card, Facts, Field, Shell } from '../components/ui'
 
 const TOKEN_KEY = 'dh_company_token'
+
+function modBadge(status?: string) {
+  if (status === 'approved') return <span className="badge badge-ok">модерация пройдена</span>
+  if (status === 'rejected') return <span className="badge badge-warn">отклонена</span>
+  return <span className="badge badge-warn">на модерации</span>
+}
+
+function empLabel(status?: string) {
+  return (
+    {
+      pending: 'ожидает подтверждения водителя',
+      confirmed: 'водитель подтвердил работу',
+      rejected: 'водитель отклонил',
+      ended: 'завершено',
+    }[status || ''] || status || 'нет связи'
+  )
+}
 
 export function CompanyPage() {
   const [params] = useSearchParams()
@@ -18,7 +35,9 @@ export function CompanyPage() {
   const [searching, setSearching] = useState(false)
   const [hub, setHub] = useState(() => params.get('hub') || 'DH-DEMOTST2')
   const [dossier, setDossier] = useState<DriverDossier | null>(null)
+  const [employments, setEmployments] = useState<Employment[]>([])
   const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
 
   useEffect(() => {
     const fromQr = params.get('hub')
@@ -32,9 +51,15 @@ export function CompanyPage() {
     }
     let cancelled = false
     setBooting(true)
-    api<Company>('/api/v1/me/company', { token })
-      .then((c) => {
-        if (!cancelled) setCompany(c)
+    Promise.all([
+      api<Company>('/api/v1/me/company', { token }),
+      api<Employment[]>('/api/v1/me/employments', { token }).catch(() => [] as Employment[]),
+    ])
+      .then(([c, emps]) => {
+        if (!cancelled) {
+          setCompany(c)
+          setEmployments(emps)
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -102,12 +127,22 @@ export function CompanyPage() {
     }
   }
 
+  async function refreshEmployments() {
+    try {
+      setEmployments(await api<Employment[]>('/api/v1/me/employments', { token }))
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function loadDossier(e?: FormEvent) {
     e?.preventDefault()
     setError('')
+    setOkMsg('')
     setSearching(true)
     try {
       setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(hub.trim())}/dossier`, { token }))
+      await refreshEmployments()
     } catch (err) {
       setDossier(null)
       setError(errMessage(err))
@@ -116,8 +151,21 @@ export function CompanyPage() {
     }
   }
 
+  async function claimEmployment() {
+    setError('')
+    setOkMsg('')
+    try {
+      await api(`/api/v1/drivers/${encodeURIComponent(hub.trim())}/employments`, { method: 'POST', token })
+      setOkMsg('Запрос отправлен — водитель должен подтвердить работу в компании')
+      await loadDossier()
+    } catch (err) {
+      setError(errMessage(err))
+    }
+  }
+
   async function act(path: string, body: unknown) {
     setError('')
+    setOkMsg('')
     try {
       await api(`/api/v1/drivers/${encodeURIComponent(hub.trim())}${path}`, { method: 'POST', token, body })
       await loadDossier()
@@ -131,6 +179,7 @@ export function CompanyPage() {
     setToken('')
     setCompany(null)
     setDossier(null)
+    setEmployments([])
   }
 
   if (booting) {
@@ -171,13 +220,40 @@ export function CompanyPage() {
     )
   }
 
+  const approved = company.moderation_status === 'approved' || company.verified
   const d = dossier?.driver
+  const emp = dossier?.viewer_employment
+  const canWrite = approved && emp?.status === 'confirmed'
 
   return (
     <Shell role="Компания" onLogout={logout}>
-      <Card title={company.name}>
+      <Card title={company.name} badge={modBadge(company.moderation_status)}>
         <p className="sub">ИНН {company.inn}</p>
+        {!approved && (
+          <Alert kind="error">
+            {company.moderation_status === 'rejected'
+              ? 'Регистрация отклонена модератором. Жалобы и рекомендации недоступны.'
+              : 'Компания на модерации. После одобрения можно будет указывать водителей и писать отзывы.'}
+          </Alert>
+        )}
       </Card>
+
+      {employments.filter((e) => e.status === 'pending' || e.status === 'confirmed').length > 0 && (
+        <section className="card">
+          <h2>Ваши водители</h2>
+          <ul className="list">
+            {employments
+              .filter((e) => e.status === 'pending' || e.status === 'confirmed')
+              .map((e) => (
+                <li key={e.id}>
+                  <b>{e.driver_name || 'Водитель'}</b> · {e.driver_hub_id}
+                  <br />
+                  <span className="sub">{empLabel(e.status)}</span>
+                </li>
+              ))}
+          </ul>
+        </section>
+      )}
 
       <section className="card">
         <h2>Поиск водителя</h2>
@@ -193,6 +269,7 @@ export function CompanyPage() {
           </button>
         </form>
         <Alert kind="error">{error}</Alert>
+        <Alert kind="ok">{okMsg}</Alert>
       </section>
 
       {d && (
@@ -209,8 +286,24 @@ export function CompanyPage() {
               ['Стаж', `${d.experience_years || 0} лет`],
               ['ВУ', d.license ? `${d.license.series} ${d.license.number}` : '—'],
               ['СНИЛС', d.snils || '—'],
+              ['Работа у вас', empLabel(emp?.status)],
             ]}
           />
+
+          {approved && emp?.status !== 'confirmed' && emp?.status !== 'pending' && (
+            <div className="verify-callout" style={{ marginTop: 16 }}>
+              <div>
+                <strong>Указать, что водитель работает у вас</strong>
+                <p>Водитель получит запрос и должен подтвердить. После этого можно писать жалобы и рекомендации.</p>
+              </div>
+              <button type="button" className="btn btn-primary" onClick={claimEmployment}>
+                Отправить запрос
+              </button>
+            </div>
+          )}
+          {emp?.status === 'pending' && (
+            <Alert kind="ok">Запрос отправлен. Ждём подтверждения водителя.</Alert>
+          )}
 
           {dossier && (
             <>
@@ -272,47 +365,53 @@ export function CompanyPage() {
                 </div>
               </div>
 
-              <div className="actions">
-                <button type="button" className="btn btn-primary" onClick={() => act('/recommendations', { text: 'Рекомендуем к найму', rating: 5 })}>
-                  Рекомендация
-                </button>
-                <button type="button" className="btn" onClick={() => act('/complaints', { category: 'discipline', text: 'Нарушение дисциплины', severity: 'low' })}>
-                  Жалоба
-                </button>
-                <button type="button" className="btn btn-danger" onClick={() => act('/blacklist', { reason: 'Нарушения требований безопасности' })}>
-                  Чёрный список
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    act('/accidents', {
-                      occurred_at: new Date().toISOString(),
-                      description: 'ДТП',
-                      fault: 'unknown',
-                      damage_level: 'minor',
-                      location: '',
-                    })
-                  }
-                >
-                  ДТП
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    act('/fines', {
-                      article: '12.9 КоАП',
-                      amount: 5000,
-                      issued_at: new Date().toISOString().slice(0, 10),
-                      paid: false,
-                      description: '',
-                    })
-                  }
-                >
-                  Штраф
-                </button>
-              </div>
+              {canWrite ? (
+                <div className="actions">
+                  <button type="button" className="btn btn-primary" onClick={() => act('/recommendations', { text: 'Рекомендуем к найму', rating: 5 })}>
+                    Рекомендация
+                  </button>
+                  <button type="button" className="btn" onClick={() => act('/complaints', { category: 'discipline', text: 'Нарушение дисциплины', severity: 'low' })}>
+                    Жалоба
+                  </button>
+                  <button type="button" className="btn btn-danger" onClick={() => act('/blacklist', { reason: 'Нарушения требований безопасности' })}>
+                    Чёрный список
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      act('/accidents', {
+                        occurred_at: new Date().toISOString(),
+                        description: 'ДТП',
+                        fault: 'unknown',
+                        damage_level: 'minor',
+                        location: '',
+                      })
+                    }
+                  >
+                    ДТП
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      act('/fines', {
+                        article: '12.9 КоАП',
+                        amount: 5000,
+                        issued_at: new Date().toISOString().slice(0, 10),
+                        paid: false,
+                        description: '',
+                      })
+                    }
+                  >
+                    Штраф
+                  </button>
+                </div>
+              ) : (
+                <p className="sub" style={{ marginTop: 16 }}>
+                  Жалобы и рекомендации доступны только после подтверждения работы водителя в вашей компании.
+                </p>
+              )}
             </>
           )}
         </section>

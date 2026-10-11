@@ -28,6 +28,7 @@ services:
       DB_HOST: db
       DB_PORT: "5432"
       JWT_SECRET: dev-secret-change-me
+      ADMIN_PASSWORD: admin-change-me
       ESIA_MODE: mock
       VISION_MODE: mock
       PUBLIC_BASE_URL: http://localhost

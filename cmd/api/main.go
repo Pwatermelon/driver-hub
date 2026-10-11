@@ -72,7 +72,7 @@ func main() {
 		visionScanner = vision.NewMockScanner()
 	}
 
-	svc := service.New(store, tokens, esiaClient, visionScanner)
+	svc := service.New(store, tokens, esiaClient, visionScanner, cfg.AdminPassword)
 	h := httpapi.NewHandler(svc, mock)
 
 	_ = os.MkdirAll(cfg.UploadDir, 0o755)

@@ -30,6 +30,7 @@ type Config struct {
 	OpenAIAPIKey        string
 	OpenAIBaseURL       string
 	OpenAIVisionModel   string
+	AdminPassword       string
 }
 
 func Load() (*Config, error) {
@@ -54,6 +55,7 @@ func Load() (*Config, error) {
 		OpenAIAPIKey:        getEnv("OPENAI_API_KEY", ""),
 		OpenAIBaseURL:       getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		OpenAIVisionModel:   getEnv("OPENAI_VISION_MODEL", "gpt-4o-mini"),
+		AdminPassword:       getEnv("ADMIN_PASSWORD", "admin-change-me"),
 	}
 	if cfg.VisionMode == "openai" && cfg.OpenAIAPIKey == "" {
 		cfg.VisionMode = "mock"

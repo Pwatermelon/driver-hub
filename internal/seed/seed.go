@@ -8,6 +8,7 @@ import (
 	"github.com/driver-hub/driver-hub/internal/auth"
 	"github.com/driver-hub/driver-hub/internal/domain"
 	"github.com/driver-hub/driver-hub/internal/repository/postgres"
+	"github.com/google/uuid"
 )
 
 const DemoPassword = "demo1234"
@@ -25,7 +26,45 @@ func Run(ctx context.Context, store *postgres.Store) error {
 	if len(companies) == 0 || len(drivers) == 0 {
 		return nil
 	}
+	ensureDemoEmployments(ctx, store, companies, drivers)
 	return seedDossiers(ctx, store, companies, drivers)
+}
+
+func ensureDemoEmployments(ctx context.Context, store *postgres.Store, companies []*domain.Company, drivers []*domain.Driver) {
+	byHub := map[string]*domain.Driver{}
+	for _, d := range drivers {
+		byHub[d.HubID] = d
+	}
+	pick := func(idxs ...int) []*domain.Company {
+		var out []*domain.Company
+		for _, i := range idxs {
+			if i >= 0 && i < len(companies) {
+				out = append(out, companies[i])
+			}
+		}
+		return out
+	}
+	pairs := []struct {
+		hub string
+		cos []*domain.Company
+	}{
+		{"DH-DEMOTST2", companies},
+		{"DH-PETROV01", companies},
+		{"DH-SIDOROV2", companies},
+		{"DH-KOZLOVA3", pick(0, 2)},
+		{"DH-ORLOV05", pick(1, 2)},
+	}
+	for _, p := range pairs {
+		d := byHub[p.hub]
+		if d == nil {
+			continue
+		}
+		for _, c := range p.cos {
+			if c != nil {
+				seedConfirmedEmployment(ctx, store, d.ID, c.ID)
+			}
+		}
+	}
 }
 
 type companySeed struct {
@@ -67,7 +106,8 @@ func ensureCompanies(ctx context.Context, store *postgres.Store) ([]*domain.Comp
 		}
 		co = &domain.Company{
 			Name: def.Name, INN: def.INN, OGRN: def.OGRN,
-			Email: def.Email, Phone: def.Phone, PasswordHash: hash, Verified: true,
+			Email: def.Email, Phone: def.Phone, PasswordHash: hash,
+			Verified: true, ModerationStatus: domain.ModerationApproved,
 		}
 		if err := store.CreateCompany(ctx, co); err != nil {
 			return nil, err
@@ -263,7 +303,20 @@ func seedDossiers(ctx context.Context, store *postgres.Store, companies []*domai
 	return nil
 }
 
+func seedConfirmedEmployment(ctx context.Context, store *postgres.Store, driverID, companyID uuid.UUID) {
+	e, err := store.UpsertEmploymentClaim(ctx, driverID, companyID)
+	if err != nil || e == nil {
+		return
+	}
+	if e.Status != domain.EmploymentConfirmed {
+		_, _ = store.SetEmploymentStatus(ctx, e.ID, domain.EmploymentConfirmed)
+	}
+}
+
 func seedIvanov(ctx context.Context, store *postgres.Store, d *domain.Driver, a, b, c *domain.Company) {
+	seedConfirmedEmployment(ctx, store, d.ID, a.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, b.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, c.ID)
 	_ = store.AddRecommendation(ctx, &domain.Recommendation{
 		DriverID: d.ID, CompanyID: a.ID, Text: "Ответственный водитель, рекомендуем к найму на междугородние рейсы", Rating: 5,
 	})
@@ -295,6 +348,9 @@ func seedIvanov(ctx context.Context, store *postgres.Store, d *domain.Driver, a,
 }
 
 func seedPetrov(ctx context.Context, store *postgres.Store, d *domain.Driver, a, b, c *domain.Company) {
+	seedConfirmedEmployment(ctx, store, d.ID, a.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, b.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, c.ID)
 	_ = store.AddRecommendation(ctx, &domain.Recommendation{
 		DriverID: d.ID, CompanyID: a.ID, Text: "Опытный водитель CE, знает длинные плечи", Rating: 3,
 	})
@@ -323,6 +379,9 @@ func seedPetrov(ctx context.Context, store *postgres.Store, d *domain.Driver, a,
 }
 
 func seedSidorov(ctx context.Context, store *postgres.Store, d *domain.Driver, a, b, c *domain.Company) {
+	seedConfirmedEmployment(ctx, store, d.ID, a.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, b.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, c.ID)
 	_ = store.AddRecommendation(ctx, &domain.Recommendation{
 		DriverID: d.ID, CompanyID: c.ID, Text: "Сильный водитель на фурах, знает северные направления", Rating: 4,
 	})
@@ -363,6 +422,8 @@ func seedSidorov(ctx context.Context, store *postgres.Store, d *domain.Driver, a
 }
 
 func seedKozlova(ctx context.Context, store *postgres.Store, d *domain.Driver, a, c *domain.Company) {
+	seedConfirmedEmployment(ctx, store, d.ID, a.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, c.ID)
 	_ = store.AddRecommendation(ctx, &domain.Recommendation{
 		DriverID: d.ID, CompanyID: a.ID, Text: "Отличная дисциплина на городских доставках", Rating: 5,
 	})
@@ -378,6 +439,8 @@ func seedKozlova(ctx context.Context, store *postgres.Store, d *domain.Driver, a
 }
 
 func seedOrlov(ctx context.Context, store *postgres.Store, d *domain.Driver, b, c *domain.Company) {
+	seedConfirmedEmployment(ctx, store, d.ID, b.ID)
+	seedConfirmedEmployment(ctx, store, d.ID, c.ID)
 	_ = store.AddComplaint(ctx, &domain.Complaint{
 		DriverID: d.ID, CompanyID: b.ID, Category: "safety",
 		Text: "Управление в состоянии опьянения — основание для расторжения", Severity: "high",
