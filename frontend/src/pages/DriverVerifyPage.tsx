@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { api, apiForm } from '../api/client'
+import { api, apiForm, errMessage } from '../api/client'
 import type { Driver, LicenseDraft } from '../api/types'
 import { Alert, Card, Field, Shell } from '../components/ui'
 
@@ -47,7 +47,7 @@ export function DriverVerifyPage() {
       setDriver(data.driver)
       setMsg({ kind: 'ok', text: 'Данные из Госуслуг сохранены' })
     } catch (err) {
-      setMsg({ kind: 'error', text: err instanceof Error ? err.message : 'Ошибка' })
+      setMsg({ kind: 'error', text: errMessage(err) })
     }
   }
 
@@ -68,7 +68,7 @@ export function DriverVerifyPage() {
       setForm({ ...data })
       setMsg({ kind: 'ok', text: 'Проверьте поля и сохраните' })
     } catch (err) {
-      setMsg({ kind: 'error', text: err instanceof Error ? err.message : 'Ошибка' })
+      setMsg({ kind: 'error', text: errMessage(err) })
     } finally {
       setScanning(false)
     }
@@ -92,7 +92,7 @@ export function DriverVerifyPage() {
       setDriver(d)
       setMsg({ kind: 'ok', text: 'ВУ сохранено' })
     } catch (err) {
-      setMsg({ kind: 'error', text: err instanceof Error ? err.message : 'Ошибка' })
+      setMsg({ kind: 'error', text: errMessage(err) })
     }
   }
 

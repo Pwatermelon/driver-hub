@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, errMessage } from '../api/client'
 import type { Company, DriverDossier } from '../api/types'
+import { AuthPanel } from '../components/AuthPanel'
 import { Alert, Badge, Card, Facts, Field, Shell } from '../components/ui'
-import { BrandMark } from '../components/Brand'
 
 const TOKEN_KEY = 'dh_company_token'
 
@@ -11,8 +11,11 @@ export function CompanyPage() {
   const [params] = useSearchParams()
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '')
   const [company, setCompany] = useState<Company | null>(null)
+  const [booting, setBooting] = useState(() => !!localStorage.getItem(TOKEN_KEY))
   const [tab, setTab] = useState<'login' | 'reg'>('login')
   const [authError, setAuthError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [searching, setSearching] = useState(false)
   const [hub, setHub] = useState(() => params.get('hub') || 'DH-DEMOTST2')
   const [dossier, setDossier] = useState<DriverDossier | null>(null)
   const [error, setError] = useState('')
@@ -23,32 +26,41 @@ export function CompanyPage() {
   }, [params])
 
   useEffect(() => {
-    if (!token) return
+    if (!token) {
+      setBooting(false)
+      return
+    }
+    let cancelled = false
+    setBooting(true)
     api<Company>('/api/v1/me/company', { token })
-      .then(setCompany)
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY)
-        setToken('')
-        setCompany(null)
+      .then((c) => {
+        if (!cancelled) setCompany(c)
       })
+      .catch(() => {
+        if (!cancelled) {
+          localStorage.removeItem(TOKEN_KEY)
+          setToken('')
+          setCompany(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBooting(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [token])
 
   useEffect(() => {
     if (!company || !params.get('hub')) return
-    void (async () => {
-      setError('')
-      try {
-        setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(hub)}/dossier`, { token }))
-      } catch (err) {
-        setDossier(null)
-        setError(err instanceof Error ? err.message : 'Ошибка')
-      }
-    })()
-  }, [company, params, hub, token])
+    void loadDossier()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company])
 
   async function login(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setAuthError('')
+    setBusy(true)
     const fd = new FormData(e.currentTarget)
     try {
       const data = await api<{ company: Company; token: string }>('/api/v1/auth/company/login', {
@@ -59,13 +71,16 @@ export function CompanyPage() {
       setToken(data.token)
       setCompany(data.company)
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Ошибка')
+      setAuthError(errMessage(err))
+    } finally {
+      setBusy(false)
     }
   }
 
   async function register(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setAuthError('')
+    setBusy(true)
     const fd = new FormData(e.currentTarget)
     try {
       const data = await api<{ company: Company; token: string }>('/api/v1/auth/company/register', {
@@ -81,28 +96,33 @@ export function CompanyPage() {
       setToken(data.token)
       setCompany(data.company)
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Ошибка')
+      setAuthError(errMessage(err))
+    } finally {
+      setBusy(false)
     }
   }
 
   async function loadDossier(e?: FormEvent) {
     e?.preventDefault()
     setError('')
+    setSearching(true)
     try {
-      setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(hub)}/dossier`, { token }))
+      setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(hub.trim())}/dossier`, { token }))
     } catch (err) {
       setDossier(null)
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError(errMessage(err))
+    } finally {
+      setSearching(false)
     }
   }
 
   async function act(path: string, body: unknown) {
     setError('')
     try {
-      await api(`/api/v1/drivers/${encodeURIComponent(hub)}${path}`, { method: 'POST', token, body })
+      await api(`/api/v1/drivers/${encodeURIComponent(hub.trim())}${path}`, { method: 'POST', token, body })
       await loadDossier()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError(errMessage(err))
     }
   }
 
@@ -113,56 +133,40 @@ export function CompanyPage() {
     setDossier(null)
   }
 
+  if (booting) {
+    return (
+      <Shell role="Компания" centered>
+        <p className="boot-msg">Загрузка…</p>
+      </Shell>
+    )
+  }
+
   if (!company) {
     return (
       <Shell role="Компания" centered>
-        <div className="auth-panel">
-          <div className="auth-brand">
-            <BrandMark size={40} />
-          </div>
-          <Card title="Вход компании">
-            <div className="tabs">
-              <button type="button" className={tab === 'login' ? 'active' : ''} onClick={() => setTab('login')}>
-                Вход
-              </button>
-              <button type="button" className={tab === 'reg' ? 'active' : ''} onClick={() => setTab('reg')}>
-                Регистрация
-              </button>
-            </div>
-            {tab === 'login' ? (
-              <form className="form" onSubmit={login}>
-                <Field label="Email">
-                  <input name="email" type="email" defaultValue="hr@logplus.ru" autoComplete="username" required />
-                </Field>
-                <Field label="Пароль">
-                  <input name="password" type="password" defaultValue="demo1234" autoComplete="current-password" required />
-                </Field>
-                <button className="btn btn-primary btn-block" type="submit">
-                  Войти
-                </button>
-              </form>
-            ) : (
-              <form className="form" onSubmit={register}>
-                <Field label="Название">
-                  <input name="name" required />
-                </Field>
-                <Field label="ИНН">
-                  <input name="inn" inputMode="numeric" required />
-                </Field>
-                <Field label="Email">
-                  <input name="email" type="email" required />
-                </Field>
-                <Field label="Пароль">
-                  <input name="password" type="password" required />
-                </Field>
-                <button className="btn btn-primary btn-block" type="submit">
-                  Создать
-                </button>
-              </form>
-            )}
-            <Alert kind="error">{authError}</Alert>
-          </Card>
-        </div>
+        <AuthPanel
+          title="Кабинет компании"
+          tab={tab}
+          onTab={(t) => {
+            setTab(t)
+            setAuthError('')
+          }}
+          error={authError}
+          loading={busy}
+          onLogin={login}
+          onRegister={register}
+          loginDefaults={{ email: 'hr@logplus.ru', password: 'demo1234' }}
+          registerExtra={
+            <>
+              <Field label="Название">
+                <input name="name" required disabled={busy} />
+              </Field>
+              <Field label="ИНН">
+                <input name="inn" inputMode="numeric" required disabled={busy} />
+              </Field>
+            </>
+          }
+        />
       </Shell>
     )
   }
@@ -178,14 +182,14 @@ export function CompanyPage() {
       <section className="card">
         <h2>Поиск водителя</h2>
         <p className="sub" style={{ marginBottom: 14 }}>
-          По Hub ID или QR с телефона водителя
+          Введите Hub ID или отсканируйте QR с телефона водителя
         </p>
         <form className="form form-row" onSubmit={loadDossier}>
           <Field label="Hub ID" className="grow">
-            <input value={hub} onChange={(e) => setHub(e.target.value)} required />
+            <input value={hub} onChange={(e) => setHub(e.target.value)} required disabled={searching} />
           </Field>
-          <button className="btn btn-primary" type="submit">
-            Открыть досье
+          <button className="btn btn-primary" type="submit" disabled={searching}>
+            {searching ? 'Ищем…' : 'Открыть досье'}
           </button>
         </form>
         <Alert kind="error">{error}</Alert>

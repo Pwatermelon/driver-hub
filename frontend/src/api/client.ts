@@ -2,13 +2,19 @@ async function parse<T>(res: Response): Promise<T> {
   const text = await res.text()
   let data: unknown
   try {
-    data = JSON.parse(text)
+    data = text ? JSON.parse(text) : {}
   } catch {
     data = { raw: text }
   }
   if (!res.ok) {
     const err = data as { error?: string }
-    throw new Error(err.error || res.statusText || `HTTP ${res.status}`)
+    let message = err.error || res.statusText || `HTTP ${res.status}`
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      message = 'Сервер временно недоступен. Попробуйте позже'
+    } else if (res.status >= 500 && !err.error) {
+      message = 'Ошибка сервера. Попробуйте позже'
+    }
+    throw new Error(message)
   }
   return data as T
 }
@@ -17,7 +23,7 @@ async function request(path: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(path, init)
   } catch {
-    throw new Error('Нет связи с сервером. Проверьте сеть или что API доступен по /api')
+    throw new Error('Нет связи с сервером. Проверьте интернет или доступность сайта')
   }
 }
 
@@ -55,4 +61,8 @@ export function statusLabel(s?: string) {
       expired: 'истёк',
     }[s || ''] || s || '—'
   )
+}
+
+export function errMessage(err: unknown, fallback = 'Ошибка') {
+  return err instanceof Error ? err.message : fallback
 }

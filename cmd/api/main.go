@@ -36,7 +36,7 @@ func main() {
 
 	migPath := os.Getenv("MIGRATIONS_PATH")
 	if migPath == "" {
-		migPath = "migrations/001_init.sql"
+		migPath = "migrations"
 	}
 	if err := postgres.Migrate(ctx, pool, migPath); err != nil {
 		log.Fatalf("migrate: %v", err)

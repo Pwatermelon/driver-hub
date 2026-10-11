@@ -32,7 +32,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	msg := err.Error()
+	// Не светим сырой SQL/драйвер наружу
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "sqlstate") || strings.Contains(low, "pq:") || strings.Contains(low, "duplicate key") {
+		msg = "ошибка сохранения данных"
+	}
+	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
