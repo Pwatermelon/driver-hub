@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { api, apiForm, errMessage } from '../api/client'
 import type { Driver, LicenseDraft } from '../api/types'
-import { Alert, Card, Field, Shell } from '../components/ui'
+import { Alert, Card, Field, FilePick, Shell } from '../components/ui'
 
 const TOKEN_KEY = 'dh_driver_token'
 
@@ -133,18 +133,10 @@ export function DriverVerifyPage() {
         </div>
         <form className="form" onSubmit={scan}>
           <div className="grid-2">
-            <Field label="Лицевая сторона">
-              <input type="file" accept="image/*" capture="environment" required onChange={(e) => setFront(e.target.files?.[0] || null)} />
-            </Field>
-            <Field label="Оборотная сторона">
-              <input type="file" accept="image/*" capture="environment" required onChange={(e) => setBack(e.target.files?.[0] || null)} />
-            </Field>
+            <FilePick label="Лицевая сторона" file={front} preview={frontUrl} onChange={setFront} />
+            <FilePick label="Оборотная сторона" file={back} preview={backUrl} onChange={setBack} />
           </div>
-          <div className="preview-row">
-            {frontUrl && <img className="preview" src={frontUrl} alt="" />}
-            {backUrl && <img className="preview" src={backUrl} alt="" />}
-          </div>
-          <button className="btn btn-primary" type="submit" disabled={scanning}>
+          <button className="btn btn-primary btn-block" type="submit" disabled={scanning}>
             {scanning ? 'Распознаём…' : 'Распознать ВУ'}
           </button>
         </form>
