@@ -34,7 +34,7 @@ func (s *Store) GetCompanyByEmail(ctx context.Context, email string) (*domain.Co
 	var c domain.Company
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, inn, COALESCE(ogrn,''), email, COALESCE(phone,''), password_hash, verified, created_at
-		FROM companies WHERE email=$1`, email,
+		FROM companies WHERE lower(email)=lower($1)`, email,
 	).Scan(&c.ID, &c.Name, &c.INN, &c.OGRN, &c.Email, &c.Phone, &c.PasswordHash, &c.Verified, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -61,6 +61,17 @@ func (s *Store) UpdateCompanyPassword(ctx context.Context, id uuid.UUID, hash st
 
 func (s *Store) UpdateDriverPassword(ctx context.Context, id uuid.UUID, hash string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE drivers SET password_hash=$2, updated_at=NOW() WHERE id=$1`, id, hash)
+	return err
+}
+
+func (s *Store) EnsureDriverLogin(ctx context.Context, hubID, email, phone, hash string) error {
+	// освобождаем email у других, затем ставим логин демо-водителю
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE drivers SET email=NULL, updated_at=NOW()
+		WHERE lower(email)=lower($1) AND hub_id<>$2`, email, hubID)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE drivers SET email=$2, phone=COALESCE(NULLIF($3,''), phone), password_hash=$4, updated_at=NOW()
+		WHERE hub_id=$1`, hubID, email, phone, hash)
 	return err
 }
 
@@ -94,7 +105,7 @@ func (s *Store) GetDriverByEmail(ctx context.Context, email string) (*domain.Dri
 		SELECT id, hub_id, COALESCE(esia_oid,''), COALESCE(email,''), COALESCE(phone,''),
 		       last_name, first_name, COALESCE(middle_name,''), birth_date, COALESCE(snils,''), COALESCE(inn,''),
 		       experience_years, categories, verification_status, verified_at, password_hash, created_at, updated_at
-		FROM drivers WHERE email=$1`, email,
+		FROM drivers WHERE lower(email)=lower($1)`, email,
 	).Scan(&d.ID, &d.HubID, &d.ESIAOID, &d.Email, &d.Phone, &d.LastName, &d.FirstName, &d.MiddleName,
 		&d.BirthDate, &d.SNILS, &d.INN, &d.ExperienceYears, &d.Categories, &d.VerificationStatus,
 		&d.VerifiedAt, &pass, &d.CreatedAt, &d.UpdatedAt)

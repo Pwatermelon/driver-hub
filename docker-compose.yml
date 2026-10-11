@@ -22,14 +22,18 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: postgres://driverhub:driverhub@db:5432/driverhub?sslmode=disable
+      POSTGRES_USER: driverhub
+      POSTGRES_PASSWORD: driverhub
+      POSTGRES_DB: driverhub
+      DB_HOST: db
+      DB_PORT: "5432"
       JWT_SECRET: dev-secret-change-me
       ESIA_MODE: mock
       VISION_MODE: mock
       PUBLIC_BASE_URL: http://localhost
       HTTP_ADDR: ":8080"
       SEED_DEMO: "true"
-      MIGRATIONS_PATH: /app/migrations/001_init.sql
+      MIGRATIONS_PATH: /app/migrations
     depends_on:
       db:
         condition: service_healthy

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,12 +30,40 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 }
 
 func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsPath string) error {
-	data, err := os.ReadFile(migrationsPath)
+	st, err := os.Stat(migrationsPath)
+	if err != nil {
+		return err
+	}
+	var files []string
+	if st.IsDir() {
+		entries, err := os.ReadDir(migrationsPath)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+				continue
+			}
+			files = append(files, filepath.Join(migrationsPath, e.Name()))
+		}
+		sort.Strings(files)
+	} else {
+		files = []string{migrationsPath}
+	}
+	for _, f := range files {
+		if err := applyMigrationFile(ctx, pool, f); err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(f), err)
+		}
+	}
+	return nil
+}
+
+func applyMigrationFile(ctx context.Context, pool *pgxpool.Pool, path string) error {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	sql := string(data)
-	// Простой runner: берём только Up-часть до Down.
 	if i := strings.Index(sql, "-- +migrate Down"); i >= 0 {
 		sql = sql[:i]
 	}

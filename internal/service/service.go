@@ -27,23 +27,58 @@ func New(store *postgres.Store, tokens *auth.TokenManager, esiaClient esia.Clien
 	return &Service{store: store, tokens: tokens, esia: esiaClient, vision: visionScanner}
 }
 
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func mapDBErr(err error, fallback string) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "companies_email"), strings.Contains(msg, "drivers_email"):
+		return fmt.Errorf("email уже зарегистрирован")
+	case strings.Contains(msg, "companies_inn"):
+		return fmt.Errorf("компания с таким ИНН уже есть")
+	case strings.Contains(msg, "duplicate key"), strings.Contains(msg, "unique constraint"):
+		return fmt.Errorf("такая запись уже существует")
+	default:
+		return fmt.Errorf("%s", fallback)
+	}
+}
+
 func (s *Service) RegisterCompany(ctx context.Context, name, inn, ogrn, email, phone, password string) (*domain.Company, string, error) {
+	name = strings.TrimSpace(name)
+	inn = strings.TrimSpace(inn)
+	email = normalizeEmail(email)
+	phone = strings.TrimSpace(phone)
 	if name == "" || inn == "" || email == "" || password == "" {
-		return nil, "", fmt.Errorf("обязательны name, inn, email, password")
+		return nil, "", fmt.Errorf("заполните название, ИНН, email и пароль")
+	}
+	if utf8.RuneCountInString(password) < 6 {
+		return nil, "", fmt.Errorf("пароль не короче 6 символов")
+	}
+	if existing, _ := s.store.GetCompanyByEmail(ctx, email); existing != nil {
+		return nil, "", fmt.Errorf("email уже зарегистрирован")
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("не удалось сохранить пароль")
 	}
 	c := &domain.Company{Name: name, INN: inn, OGRN: ogrn, Email: email, Phone: phone, PasswordHash: hash, Verified: false}
 	if err := s.store.CreateCompany(ctx, c); err != nil {
-		return nil, "", fmt.Errorf("не удалось создать компанию: %w", err)
+		return nil, "", mapDBErr(err, "не удалось создать компанию")
 	}
 	token, err := s.tokens.Issue(c.ID, domain.RoleCompany, c.Email)
 	return c, token, err
 }
 
 func (s *Service) LoginCompany(ctx context.Context, email, password string) (*domain.Company, string, error) {
+	email = normalizeEmail(email)
+	if email == "" || password == "" {
+		return nil, "", fmt.Errorf("введите email и пароль")
+	}
 	c, err := s.store.GetCompanyByEmail(ctx, email)
 	if err != nil || c == nil {
 		return nil, "", fmt.Errorf("неверный email или пароль")
@@ -56,8 +91,16 @@ func (s *Service) LoginCompany(ctx context.Context, email, password string) (*do
 }
 
 func (s *Service) RegisterDriver(ctx context.Context, email, phone, password string) (*domain.Driver, string, error) {
+	email = normalizeEmail(email)
+	phone = strings.TrimSpace(phone)
 	if email == "" || password == "" {
-		return nil, "", fmt.Errorf("обязательны email и password")
+		return nil, "", fmt.Errorf("введите email и пароль")
+	}
+	if utf8.RuneCountInString(password) < 6 {
+		return nil, "", fmt.Errorf("пароль не короче 6 символов")
+	}
+	if existing, _, _ := s.store.GetDriverByEmail(ctx, email); existing != nil {
+		return nil, "", fmt.Errorf("email уже зарегистрирован")
 	}
 	hid, err := hubid.Generate()
 	if err != nil {
@@ -65,20 +108,24 @@ func (s *Service) RegisterDriver(ctx context.Context, email, phone, password str
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("не удалось сохранить пароль")
 	}
 	d := &domain.Driver{
 		HubID: hid, Email: email, Phone: phone,
 		Categories: []string{}, VerificationStatus: domain.VerificationNone,
 	}
 	if err := s.store.CreateDriver(ctx, d, hash); err != nil {
-		return nil, "", fmt.Errorf("не удалось создать водителя: %w", err)
+		return nil, "", mapDBErr(err, "не удалось создать водителя")
 	}
 	token, err := s.tokens.Issue(d.ID, domain.RoleDriver, d.Email)
 	return d, token, err
 }
 
 func (s *Service) LoginDriver(ctx context.Context, email, password string) (*domain.Driver, string, error) {
+	email = normalizeEmail(email)
+	if email == "" || password == "" {
+		return nil, "", fmt.Errorf("введите email и пароль")
+	}
 	d, hash, err := s.store.GetDriverByEmail(ctx, email)
 	if err != nil || d == nil || hash == "" || !auth.CheckPassword(hash, password) {
 		return nil, "", fmt.Errorf("неверный email или пароль")
@@ -264,6 +311,21 @@ func (s *Service) GetDossier(ctx context.Context, companyID uuid.UUID, hub strin
 	accs, _ := s.store.ListAccidents(ctx, d.ID)
 	fines, _ := s.store.ListFines(ctx, d.ID)
 	mine, _ := s.store.IsBlacklistedBy(ctx, d.ID, companyID)
+	if recs == nil {
+		recs = []domain.Recommendation{}
+	}
+	if cmps == nil {
+		cmps = []domain.Complaint{}
+	}
+	if bls == nil {
+		bls = []domain.BlacklistEntry{}
+	}
+	if accs == nil {
+		accs = []domain.Accident{}
+	}
+	if fines == nil {
+		fines = []domain.Fine{}
+	}
 	return &domain.DriverDossier{
 		Driver: *d, Recommendations: recs, Complaints: cmps, BlacklistEntries: bls,
 		Accidents: accs, Fines: fines, BlacklistedByViewer: mine,

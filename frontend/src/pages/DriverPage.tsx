@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
-import { api } from '../api/client'
+import { api, errMessage } from '../api/client'
 import type { Driver } from '../api/types'
-import { Alert, Badge, Card, Facts, Field, Shell } from '../components/ui'
-import { BrandMark } from '../components/Brand'
+import { AuthPanel } from '../components/AuthPanel'
+import { Badge, Facts, Field, Shell } from '../components/ui'
 
 const TOKEN_KEY = 'dh_driver_token'
 
@@ -13,8 +13,10 @@ export function DriverPage() {
   const navigate = useNavigate()
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '')
   const [driver, setDriver] = useState<Driver | null>(null)
+  const [booting, setBooting] = useState(() => !!localStorage.getItem(TOKEN_KEY))
   const [tab, setTab] = useState<'login' | 'reg'>('login')
   const [authError, setAuthError] = useState('')
+  const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -27,25 +29,40 @@ export function DriverPage() {
   }, [params, setParams])
 
   useEffect(() => {
-    if (!token) return
+    if (!token) {
+      setBooting(false)
+      return
+    }
+    let cancelled = false
+    setBooting(true)
     api<Driver>('/api/v1/me/driver', { token })
-      .then(setDriver)
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY)
-        setToken('')
-        setDriver(null)
+      .then((d) => {
+        if (!cancelled) setDriver(d)
       })
+      .catch(() => {
+        if (!cancelled) {
+          localStorage.removeItem(TOKEN_KEY)
+          setToken('')
+          setDriver(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBooting(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [token])
 
   const qrValue = useMemo(() => {
     if (!driver) return ''
-    const base = window.location.origin
-    return `${base}/company?hub=${encodeURIComponent(driver.hub_id)}`
+    return `${window.location.origin}/company?hub=${encodeURIComponent(driver.hub_id)}`
   }, [driver])
 
   async function login(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setAuthError('')
+    setBusy(true)
     const fd = new FormData(e.currentTarget)
     try {
       const data = await api<{ driver: Driver; token: string }>('/api/v1/auth/driver/login', {
@@ -56,13 +73,16 @@ export function DriverPage() {
       setToken(data.token)
       setDriver(data.driver)
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Ошибка')
+      setAuthError(errMessage(err))
+    } finally {
+      setBusy(false)
     }
   }
 
   async function register(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setAuthError('')
+    setBusy(true)
     const fd = new FormData(e.currentTarget)
     try {
       const data = await api<{ driver: Driver; token: string }>('/api/v1/auth/driver/register', {
@@ -77,7 +97,9 @@ export function DriverPage() {
       setToken(data.token)
       setDriver(data.driver)
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Ошибка')
+      setAuthError(errMessage(err))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -98,53 +120,35 @@ export function DriverPage() {
     }
   }
 
+  if (booting) {
+    return (
+      <Shell role="Водитель" centered>
+        <p className="boot-msg">Загрузка профиля…</p>
+      </Shell>
+    )
+  }
+
   if (!driver) {
     return (
       <Shell role="Водитель" centered>
-        <div className="auth-panel">
-          <div className="auth-brand">
-            <BrandMark size={40} />
-          </div>
-          <Card title="Вход водителя">
-            <div className="tabs">
-              <button type="button" className={tab === 'login' ? 'active' : ''} onClick={() => setTab('login')}>
-                Вход
-              </button>
-              <button type="button" className={tab === 'reg' ? 'active' : ''} onClick={() => setTab('reg')}>
-                Регистрация
-              </button>
-            </div>
-            {tab === 'login' ? (
-              <form className="form" onSubmit={login}>
-                <Field label="Email">
-                  <input name="email" type="email" defaultValue="driver@demo.ru" autoComplete="username" required />
-                </Field>
-                <Field label="Пароль">
-                  <input name="password" type="password" defaultValue="demo1234" autoComplete="current-password" required />
-                </Field>
-                <button className="btn btn-primary btn-block" type="submit">
-                  Войти
-                </button>
-              </form>
-            ) : (
-              <form className="form" onSubmit={register}>
-                <Field label="Email">
-                  <input name="email" type="email" required />
-                </Field>
-                <Field label="Пароль">
-                  <input name="password" type="password" required minLength={6} />
-                </Field>
-                <Field label="Телефон">
-                  <input name="phone" inputMode="tel" />
-                </Field>
-                <button className="btn btn-primary btn-block" type="submit">
-                  Создать
-                </button>
-              </form>
-            )}
-            <Alert kind="error">{authError}</Alert>
-          </Card>
-        </div>
+        <AuthPanel
+          title="Кабинет водителя"
+          tab={tab}
+          onTab={(t) => {
+            setTab(t)
+            setAuthError('')
+          }}
+          error={authError}
+          loading={busy}
+          onLogin={login}
+          onRegister={register}
+          loginDefaults={{ email: 'driver@demo.ru', password: 'demo1234' }}
+          registerExtra={
+            <Field label="Телефон">
+              <input name="phone" inputMode="tel" disabled={busy} />
+            </Field>
+          }
+        />
       </Shell>
     )
   }
@@ -201,7 +205,9 @@ export function DriverPage() {
         </div>
 
         <div className="id-card-qr">
-          <QRCodeSVG value={qrValue} size={168} level="M" includeMargin={false} bgColor="#ffffff" fgColor="#0b1f2a" />
+          <div className="qr-frame">
+            <QRCodeSVG value={qrValue} size={168} level="M" includeMargin={false} bgColor="#ffffff" fgColor="#0b1f2a" />
+          </div>
           <p>Покажите QR компании для идентификации</p>
         </div>
       </section>

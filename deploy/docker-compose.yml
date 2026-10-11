@@ -31,7 +31,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN}}
       HTTP_ADDR: ":8080"
       SEED_DEMO: ${SEED_DEMO:-true}
-      MIGRATIONS_PATH: /app/migrations/001_init.sql
+      MIGRATIONS_PATH: /app/migrations
     depends_on:
       db:
         condition: service_healthy
