@@ -34,3 +34,26 @@
 		format console
 	}
 }
+
+# Планировщик (planning-tool) на хосте: 127.0.0.1:8010
+# DNS: A-запись plan.<DOMAIN> → тот же IP. BotFather /setdomain → plan.<DOMAIN>
+plan.{$DOMAIN} {
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options SAMEORIGIN
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	encode gzip
+	reverse_proxy host.docker.internal:8010 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

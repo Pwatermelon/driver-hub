@@ -81,3 +81,15 @@ https://hackton-test.ru/company
 
 Образ: `ghcr.io/<owner>/driver-hub-api:<version>` + `ghcr.io/<owner>/driver-hub-web:<version>`
 
+## Планировщик (planning-tool) через этот Caddy
+
+На том же сервере planning-tool слушает `127.0.0.1:8010` (свой Caddy не поднимает).
+
+В `deploy/Caddyfile` уже есть сайт `plan.{$DOMAIN}` → `host.docker.internal:8010`.
+
+1. DNS: `plan.hackton-test.ru` (или `plan.<твой DOMAIN>`) → IP сервера  
+2. В planning-tool GitHub secret `DOMAIN` = `plan.hackton-test.ru`  
+3. BotFather `/setdomain` → тот же хост  
+4. После пуша Driver Hub: `cd /opt/driver-hub && docker compose up -d caddy`  
+5. Проверка: `curl -fsSI https://plan.hackton-test.ru/` и `curl -fsS http://127.0.0.1:8010/api/healthz`
+
