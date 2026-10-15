@@ -93,3 +93,13 @@ https://hackton-test.ru/company
 4. После пуша Driver Hub: `cd /opt/driver-hub && docker compose up -d caddy`  
 5. Проверка: `curl -fsSI https://plan.hackton-test.ru/` и `curl -fsS http://127.0.0.1:8010/api/healthz`
 
+## Если `error from registry: denied` при pull
+
+Образы в GHCR **private**, а на сервере нет логина.
+
+Варианты (достаточно одного):
+
+1. GitHub → Packages → `driver-hub-api` и `driver-hub-web` → **Package settings** → Change visibility → **Public**
+2. Или Secret `GHCR_PULL_TOKEN` = PAT с правом `read:packages` (Environment `production`)
+3. После фикса workflow логинится через `GITHUB_TOKEN` автоматически — перезапусти деплой с новой версией (`var x.y.z`)
+

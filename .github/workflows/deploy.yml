@@ -192,9 +192,10 @@ jobs:
       - name: Pull image and restart
         run: |
           PATH_DIR="${DEPLOY_PATH:-/opt/driver-hub}"
-          if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
-            ssh deploy-target "echo '$GHCR_PULL_TOKEN' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin"
-          fi
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          # Private GHCR: нужен логин на сервере. PAT read:packages или fallback GITHUB_TOKEN.
+          PULL_TOKEN="${GHCR_PULL_TOKEN:-${{ secrets.GITHUB_TOKEN }}}"
+          ssh deploy-target "echo '$PULL_TOKEN' | docker login ghcr.io -u '$OWNER' --password-stdin"
           ssh deploy-target "cd '$PATH_DIR' && docker compose pull && docker compose up -d --remove-orphans && docker compose ps"
 
           ssh deploy-target "PATH_DIR='$PATH_DIR' bash -s" <<'REMOTE'
