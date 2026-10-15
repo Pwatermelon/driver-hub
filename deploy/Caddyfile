@@ -35,8 +35,8 @@
 	}
 }
 
-# Планировщик (planning-tool) на хосте: 127.0.0.1:8010
-# DNS: A-запись plan.<DOMAIN> → тот же IP. BotFather /setdomain → plan.<DOMAIN>
+# Планировщик (planning-tool) на хосте :8010 (должен слушать 0.0.0.0, не только 127.0.0.1)
+# DNS: plan.<DOMAIN> → IP сервера. BotFather /setdomain → plan.<DOMAIN>
 plan.{$DOMAIN} {
 	header {
 		X-Content-Type-Options nosniff
@@ -50,6 +50,9 @@ plan.{$DOMAIN} {
 		header_up Host {host}
 		header_up X-Forwarded-Proto {scheme}
 		header_up X-Real-IP {remote_host}
+		health_uri /api/healthz
+		health_interval 30s
+		health_timeout 5s
 	}
 
 	log {
