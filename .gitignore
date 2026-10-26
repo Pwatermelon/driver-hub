@@ -8,3 +8,8 @@ coverage.out
 vendor/
 .idea/
 .vscode/
+
+# Коммерческие и партнёрские материалы хранятся только локально
+/docs/
+/.presentation-tools/
+/.playwright-browsers/

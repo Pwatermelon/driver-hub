@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, errMessage } from '../api/client'
 import type { Company, DriverDossier, Employment } from '../api/types'
 import { AuthPanel } from '../components/AuthPanel'
+import { QrScanner } from '../components/QrScanner'
 import { Alert, Badge, Card, Facts, Field, Shell } from '../components/ui'
 
 const TOKEN_KEY = 'dh_company_token'
@@ -16,8 +17,8 @@ function modBadge(status?: string) {
 function empLabel(status?: string) {
   return (
     {
-      pending: 'ожидает подтверждения водителя',
-      confirmed: 'водитель подтвердил работу',
+      pending: 'ожидает подтверждения',
+      confirmed: 'работа подтверждена',
       rejected: 'водитель отклонил',
       ended: 'завершено',
     }[status || ''] || status || 'нет связи'
@@ -33,9 +34,11 @@ export function CompanyPage() {
   const [authError, setAuthError] = useState('')
   const [busy, setBusy] = useState(false)
   const [searching, setSearching] = useState(false)
-  const [hub, setHub] = useState(() => params.get('hub') || 'DH-DEMOTST2')
+  const [hub, setHub] = useState(() => params.get('hub') || '')
   const [dossier, setDossier] = useState<DriverDossier | null>(null)
   const [employments, setEmployments] = useState<Employment[]>([])
+  const [driverFilter, setDriverFilter] = useState('')
+  const [scanOpen, setScanOpen] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
 
@@ -135,28 +138,40 @@ export function CompanyPage() {
     }
   }
 
-  async function openDossier(hubID: string) {
-    const id = hubID.trim()
-    if (!id) return
-    setHub(id)
-    setError('')
-    setOkMsg('')
-    setSearching(true)
-    try {
-      setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(id)}/dossier`, { token }))
-      await refreshEmployments()
-    } catch (err) {
-      setDossier(null)
-      setError(errMessage(err))
-    } finally {
-      setSearching(false)
-    }
-  }
+  const openDossier = useCallback(
+    async (hubID: string) => {
+      const id = hubID.trim()
+      if (!id) return
+      setHub(id)
+      setError('')
+      setOkMsg('')
+      setSearching(true)
+      try {
+        setDossier(await api<DriverDossier>(`/api/v1/drivers/${encodeURIComponent(id)}/dossier`, { token }))
+        await refreshEmployments()
+      } catch (err) {
+        setDossier(null)
+        setError(errMessage(err))
+      } finally {
+        setSearching(false)
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [token],
+  )
 
   async function loadDossier(e?: FormEvent) {
     e?.preventDefault()
     await openDossier(hub)
   }
+
+  const handleScan = useCallback(
+    (hubId: string) => {
+      void openDossier(hubId)
+    },
+    [openDossier],
+  )
+  const closeScanner = useCallback(() => setScanOpen(false), [])
 
   async function claimEmployment() {
     setError('')
@@ -164,7 +179,7 @@ export function CompanyPage() {
     try {
       await api(`/api/v1/drivers/${encodeURIComponent(hub.trim())}/employments`, { method: 'POST', token })
       setOkMsg('Запрос отправлен — водитель должен подтвердить работу в компании')
-      await loadDossier()
+      await openDossier(hub)
     } catch (err) {
       setError(errMessage(err))
     }
@@ -175,7 +190,7 @@ export function CompanyPage() {
     setOkMsg('')
     try {
       await api(`/api/v1/drivers/${encodeURIComponent(hub.trim())}${path}`, { method: 'POST', token, body })
-      await loadDossier()
+      await openDossier(hub)
     } catch (err) {
       setError(errMessage(err))
     }
@@ -188,6 +203,20 @@ export function CompanyPage() {
     setDossier(null)
     setEmployments([])
   }
+
+  const myDrivers = useMemo(
+    () => employments.filter((e) => e.status === 'pending' || e.status === 'confirmed'),
+    [employments],
+  )
+
+  const filteredDrivers = useMemo(() => {
+    const q = driverFilter.trim().toLowerCase()
+    if (!q) return myDrivers
+    return myDrivers.filter((e) => {
+      const hay = `${e.driver_name || ''} ${e.driver_hub_id || ''} ${empLabel(e.status)}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [myDrivers, driverFilter])
 
   if (booting) {
     return (
@@ -231,6 +260,7 @@ export function CompanyPage() {
   const d = dossier?.driver
   const emp = dossier?.viewer_employment
   const canWrite = approved && emp?.status === 'confirmed'
+  const activeHub = d?.hub_id || hub.trim()
 
   return (
     <Shell role="Компания" onLogout={logout}>
@@ -245,192 +275,260 @@ export function CompanyPage() {
         )}
       </Card>
 
-      {employments.filter((e) => e.status === 'pending' || e.status === 'confirmed').length > 0 && (
-        <section className="card">
-          <h2>Ваши водители</h2>
-          <ul className="list">
-            {employments
-              .filter((e) => e.status === 'pending' || e.status === 'confirmed')
-              .map((e) => (
-                <li key={e.id}>
-                  <button
-                    type="button"
-                    className="text-btn"
-                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0 }}
-                    disabled={!e.driver_hub_id || searching}
-                    onClick={() => void openDossier(e.driver_hub_id || '')}
-                  >
-                    <b>{e.driver_name || 'Водитель'}</b> · {e.driver_hub_id}
-                    <br />
-                    <span className="sub">{empLabel(e.status)}</span>
-                  </button>
-                </li>
-              ))}
-          </ul>
-        </section>
-      )}
-
-      <section className="card">
-        <h2>Поиск водителя</h2>
-        <p className="sub" style={{ marginBottom: 14 }}>
-          Введите Hub ID или отсканируйте QR с телефона водителя
-        </p>
-        <form className="form form-row" onSubmit={loadDossier}>
-          <Field label="Hub ID" className="grow">
-            <input value={hub} onChange={(e) => setHub(e.target.value)} required disabled={searching} />
-          </Field>
-          <button className="btn btn-primary" type="submit" disabled={searching}>
-            {searching ? 'Ищем…' : 'Открыть досье'}
-          </button>
-        </form>
-        <Alert kind="error">{error}</Alert>
-        <Alert kind="ok">{okMsg}</Alert>
-      </section>
-
-      {d && (
-        <section className="card">
+      <div className="company-workspace">
+        <aside className="company-sidebar card">
           <div className="card-head">
-            <h2>Досье</h2>
-            <Badge status={d.verification_status} />
+            <h2>Ваши водители</h2>
+            <span className="count-chip">{myDrivers.length}</span>
           </div>
-          <Facts
-            rows={[
-              ['Hub ID', d.hub_id],
-              ['ФИО', [d.last_name, d.first_name, d.middle_name].filter(Boolean).join(' ')],
-              ['Категории', (d.categories || []).join(', ') || '—'],
-              ['Стаж', `${d.experience_years || 0} лет`],
-              ['ВУ', d.license ? `${d.license.series} ${d.license.number}` : '—'],
-              ['СНИЛС', d.snils || '—'],
-              ['Работа у вас', empLabel(emp?.status)],
-            ]}
-          />
 
-          {approved && emp?.status !== 'confirmed' && emp?.status !== 'pending' && (
-            <div className="verify-callout" style={{ marginTop: 16 }}>
-              <div>
-                <strong>Указать, что водитель работает у вас</strong>
-                <p>Водитель получит запрос и должен подтвердить. После этого можно писать жалобы и рекомендации.</p>
-              </div>
-              <button type="button" className="btn btn-primary" onClick={claimEmployment}>
-                Отправить запрос
+          <label className="driver-filter">
+            <span className="sr-only">Поиск по списку</span>
+            <input
+              value={driverFilter}
+              onChange={(e) => setDriverFilter(e.target.value)}
+              placeholder="Поиск по имени или Hub ID"
+            />
+          </label>
+
+          <div className="driver-list-scroll">
+            {myDrivers.length === 0 ? (
+              <p className="empty-state">Пока нет связанных водителей. Отсканируйте QR или найдите по Hub ID.</p>
+            ) : filteredDrivers.length === 0 ? (
+              <p className="empty-state">Никого не найдено по запросу «{driverFilter}».</p>
+            ) : (
+              <ul className="driver-list">
+                {filteredDrivers.map((e) => {
+                  const selected = !!e.driver_hub_id && e.driver_hub_id === activeHub
+                  return (
+                    <li key={e.id}>
+                      <button
+                        type="button"
+                        className={`driver-item ${selected ? 'active' : ''}`}
+                        disabled={!e.driver_hub_id || searching}
+                        onClick={() => void openDossier(e.driver_hub_id || '')}
+                      >
+                        <span className="driver-item-name">{e.driver_name || 'Водитель'}</span>
+                        <span className="driver-item-hub">{e.driver_hub_id}</span>
+                        <span className={`driver-item-status ${e.status === 'confirmed' ? 'ok' : 'wait'}`}>
+                          {empLabel(e.status)}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </aside>
+
+        <div className="company-main">
+          <section className="card company-search">
+            <h2>Найти водителя</h2>
+            <p className="sub" style={{ marginBottom: 14 }}>
+              Сканируйте QR с телефона водителя или введите Hub ID вручную
+            </p>
+            <form className="form form-row company-search-row" onSubmit={loadDossier}>
+              <Field label="Hub ID" className="grow">
+                <input
+                  value={hub}
+                  onChange={(e) => setHub(e.target.value)}
+                  placeholder="DH-…"
+                  required
+                  disabled={searching}
+                />
+              </Field>
+              <button type="button" className="btn btn-scan" onClick={() => setScanOpen(true)} disabled={searching}>
+                Сканировать QR
               </button>
-            </div>
-          )}
-          {emp?.status === 'pending' && (
-            <Alert kind="ok">Запрос отправлен. Ждём подтверждения водителя.</Alert>
-          )}
+              <button className="btn btn-primary" type="submit" disabled={searching}>
+                {searching ? 'Ищем…' : 'Открыть досье'}
+              </button>
+            </form>
+            <Alert kind="error">{error}</Alert>
+            <Alert kind="ok">{okMsg}</Alert>
+          </section>
 
-          {dossier && (
-            <>
-              <div className="columns">
-                <Records
-                  title="Рекомендации"
-                  items={dossier.recommendations}
-                  render={(x) => (
-                    <>
-                      <b>{x.company_name || 'компания'}</b> · {x.rating}/5
-                      <br />
-                      {x.text}
-                    </>
-                  )}
-                />
-                <Records
-                  title="Жалобы"
-                  items={dossier.complaints}
-                  render={(x) => (
-                    <>
-                      <b>{x.severity}</b> · {x.category}
-                      <br />
-                      {x.text}
-                    </>
-                  )}
-                />
-                <Records
-                  title="ДТП"
-                  items={dossier.accidents}
-                  render={(x) => (
-                    <>
-                      {x.description}
-                      <br />
-                      {x.fault} / {x.damage_level}
-                    </>
-                  )}
-                />
-                <Records
-                  title="Штрафы"
-                  items={dossier.fines}
-                  render={(x) => (
-                    <>
-                      {x.article || 'штраф'} · {x.amount} ₽ · {x.paid ? 'оплачен' : 'не оплачен'}
-                    </>
-                  )}
-                />
-                <div className="span-2">
-                  <Records
-                    title="Чёрный список"
-                    items={dossier.blacklist_entries}
-                    render={(x) => (
-                      <>
-                        <b>{x.active ? 'активен' : 'снят'}</b> · {x.company_name || ''}
-                        <br />
-                        {x.reason}
-                      </>
-                    )}
-                  />
-                </div>
-              </div>
-
-              {canWrite ? (
-                <div className="actions">
-                  <button type="button" className="btn btn-primary" onClick={() => act('/recommendations', { text: 'Рекомендуем к найму', rating: 5 })}>
-                    Рекомендация
-                  </button>
-                  <button type="button" className="btn" onClick={() => act('/complaints', { category: 'discipline', text: 'Нарушение дисциплины', severity: 'low' })}>
-                    Жалоба
-                  </button>
-                  <button type="button" className="btn btn-danger" onClick={() => act('/blacklist', { reason: 'Нарушения требований безопасности' })}>
-                    Чёрный список
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() =>
-                      act('/accidents', {
-                        occurred_at: new Date().toISOString(),
-                        description: 'ДТП',
-                        fault: 'unknown',
-                        damage_level: 'minor',
-                        location: '',
-                      })
-                    }
-                  >
-                    ДТП
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() =>
-                      act('/fines', {
-                        article: '12.9 КоАП',
-                        amount: 5000,
-                        issued_at: new Date().toISOString().slice(0, 10),
-                        paid: false,
-                        description: '',
-                      })
-                    }
-                  >
-                    Штраф
-                  </button>
-                </div>
-              ) : (
-                <p className="sub" style={{ marginTop: 16 }}>
-                  Жалобы и рекомендации доступны только после подтверждения работы водителя в вашей компании.
+          <section className="card company-dossier">
+            {!d && !searching && (
+              <div className="dossier-placeholder">
+                <h2>Досье водителя</h2>
+                <p className="sub">
+                  Выберите водителя слева или нажмите «Сканировать QR», чтобы открыть карточку с телефона водителя.
                 </p>
-              )}
-            </>
-          )}
-        </section>
-      )}
+              </div>
+            )}
+
+            {searching && (
+              <div className="dossier-placeholder">
+                <h2>Досье водителя</h2>
+                <p className="sub">Загружаем карточку…</p>
+              </div>
+            )}
+
+            {d && !searching && (
+              <>
+                <div className="card-head">
+                  <h2>Досье</h2>
+                  <Badge status={d.verification_status} />
+                </div>
+                <Facts
+                  rows={[
+                    ['Hub ID', d.hub_id],
+                    ['ФИО', [d.last_name, d.first_name, d.middle_name].filter(Boolean).join(' ')],
+                    ['Категории', (d.categories || []).join(', ') || '—'],
+                    ['Стаж', `${d.experience_years || 0} лет`],
+                    ['ВУ', d.license ? `${d.license.series} ${d.license.number}` : '—'],
+                    ['СНИЛС', d.snils || '—'],
+                    ['Работа у вас', empLabel(emp?.status)],
+                  ]}
+                />
+
+                {approved && emp?.status !== 'confirmed' && emp?.status !== 'pending' && (
+                  <div className="verify-callout" style={{ marginTop: 16 }}>
+                    <div>
+                      <strong>Указать, что водитель работает у вас</strong>
+                      <p>Водитель получит запрос и должен подтвердить. После этого можно писать жалобы и рекомендации.</p>
+                    </div>
+                    <button type="button" className="btn btn-primary" onClick={claimEmployment}>
+                      Отправить запрос
+                    </button>
+                  </div>
+                )}
+                {emp?.status === 'pending' && <Alert kind="ok">Запрос отправлен. Ждём подтверждения водителя.</Alert>}
+
+                {dossier && (
+                  <>
+                    <div className="columns">
+                      <Records
+                        title="Рекомендации"
+                        items={dossier.recommendations}
+                        render={(x) => (
+                          <>
+                            <b>{x.company_name || 'компания'}</b> · {x.rating}/5
+                            <br />
+                            {x.text}
+                          </>
+                        )}
+                      />
+                      <Records
+                        title="Жалобы"
+                        items={dossier.complaints}
+                        render={(x) => (
+                          <>
+                            <b>{x.severity}</b> · {x.category}
+                            <br />
+                            {x.text}
+                          </>
+                        )}
+                      />
+                      <Records
+                        title="ДТП"
+                        items={dossier.accidents}
+                        render={(x) => (
+                          <>
+                            {x.description}
+                            <br />
+                            {x.fault} / {x.damage_level}
+                          </>
+                        )}
+                      />
+                      <Records
+                        title="Штрафы"
+                        items={dossier.fines}
+                        render={(x) => (
+                          <>
+                            {x.article || 'штраф'} · {x.amount} ₽ · {x.paid ? 'оплачен' : 'не оплачен'}
+                          </>
+                        )}
+                      />
+                      <div className="span-2">
+                        <Records
+                          title="Чёрный список"
+                          items={dossier.blacklist_entries}
+                          render={(x) => (
+                            <>
+                              <b>{x.active ? 'активен' : 'снят'}</b> · {x.company_name || ''}
+                              <br />
+                              {x.reason}
+                            </>
+                          )}
+                        />
+                      </div>
+                    </div>
+
+                    {canWrite ? (
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => act('/recommendations', { text: 'Рекомендуем к найму', rating: 5 })}
+                        >
+                          Рекомендация
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => act('/complaints', { category: 'discipline', text: 'Нарушение дисциплины', severity: 'low' })}
+                        >
+                          Жалоба
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={() => act('/blacklist', { reason: 'Нарушения требований безопасности' })}
+                        >
+                          Чёрный список
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() =>
+                            act('/accidents', {
+                              occurred_at: new Date().toISOString(),
+                              description: 'ДТП',
+                              fault: 'unknown',
+                              damage_level: 'minor',
+                              location: '',
+                            })
+                          }
+                        >
+                          ДТП
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() =>
+                            act('/fines', {
+                              article: '12.9 КоАП',
+                              amount: 5000,
+                              issued_at: new Date().toISOString().slice(0, 10),
+                              paid: false,
+                              description: '',
+                            })
+                          }
+                        >
+                          Штраф
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="sub" style={{ marginTop: 16 }}>
+                        Жалобы и рекомендации доступны только после подтверждения работы водителя в вашей компании.
+                      </p>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+
+      <button type="button" className="scan-fab" onClick={() => setScanOpen(true)} aria-label="Сканировать QR водителя">
+        QR
+      </button>
+
+      {scanOpen && <QrScanner onClose={closeScanner} onScan={handleScan} />}
     </Shell>
   )
 }
